@@ -1,0 +1,416 @@
+{
+  "entities": {
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted administrator registry entry keyed by UID",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "CustomerOrder": {
+      "title": "CustomerOrder",
+      "description": "Customer website purchase order document locked to a single paid edition (chasing-her or memories)",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "product": {
+          "type": "string",
+          "enum": ["chasing-her", "memories", "custom"]
+        },
+        "build_product": {
+          "type": "string",
+          "enum": ["chasing-her", "memories"]
+        },
+        "full_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "whatsapp": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 32
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "country": {
+          "type": "string",
+          "enum": ["gh", "ke", "ng"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending_payment", "paid", "hosted", "expired"]
+        },
+        "progress": {
+          "type": "string",
+          "enum": ["received", "building", "review", "hosted"]
+        },
+        "progress_note": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "pin": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 6,
+          "pattern": "^[0-9]{4,6}$"
+        },
+        "hosted_url": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "slug",
+        "product",
+        "build_product",
+        "full_name",
+        "whatsapp",
+        "email",
+        "country",
+        "status",
+        "progress",
+        "pin",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ChasingHerProject": {
+      "title": "ChasingHerProject",
+      "description": "Customer Chasing Her love letter website project document",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "pin": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 6,
+          "pattern": "^[0-9]{4,6}$"
+        },
+        "intro_message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "letter_title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "letter_body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10000
+        },
+        "final_message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "music_url": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "payloadJson": {
+          "type": "string",
+          "maxLength": 350000
+        },
+        "storedBytes": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "slug",
+        "ownerId",
+        "pin",
+        "intro_message",
+        "letter_title",
+        "letter_body",
+        "final_message",
+        "storedBytes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MemoriesProject": {
+      "title": "MemoriesProject",
+      "description": "Customer 34-Photo Heart Mosaic & Slideshow Memories project document",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "pin": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 6,
+          "pattern": "^[0-9]{4,6}$"
+        },
+        "hero_title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "hero_subtitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "collage_names": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "letter_title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "letter_body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10000
+        },
+        "final_message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "payloadJson": {
+          "type": "string",
+          "maxLength": 350000
+        },
+        "storedBytes": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "slug",
+        "ownerId",
+        "pin",
+        "hero_title",
+        "hero_subtitle",
+        "collage_names",
+        "letter_title",
+        "letter_body",
+        "final_message",
+        "storedBytes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MediaAssetRecord": {
+      "title": "MediaAssetRecord",
+      "description": "Compressed image or media asset metadata stored within the 5GB Firebase plan",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "projectSlug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fileName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "contentType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 100
+        },
+        "originalBytes": {
+          "type": "number"
+        },
+        "storedBytes": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "projectSlug",
+        "fileName",
+        "contentType",
+        "originalBytes",
+        "storedBytes",
+        "width",
+        "height",
+        "url",
+        "createdAt"
+      ]
+    },
+    "PlatformSetting": {
+      "title": "PlatformSetting",
+      "description": "Multi-country pricing, payment links, and platform configuration entry",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 5000
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["key", "value", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": {
+        "$ref": "#/entities/AdminUser"
+      },
+      "description": "Trusted administrator lookup documents"
+    },
+    "/orders/{orderId}": {
+      "schema": {
+        "$ref": "#/entities/CustomerOrder"
+      },
+      "description": "Customer website purchase orders locked to either Chasing Her or Memories"
+    },
+    "/projects/{projectId}": {
+      "schema": {
+        "$ref": "#/entities/ChasingHerProject"
+      },
+      "description": "Customer Chasing Her love letter website project documents"
+    },
+    "/memory_projects/{projectId}": {
+      "schema": {
+        "$ref": "#/entities/MemoriesProject"
+      },
+      "description": "Customer 34-Photo Heart Mosaic & Slideshow Memories project documents"
+    },
+    "/media_records/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/MediaAssetRecord"
+      },
+      "description": "Compressed image and media asset accounting records for the 5GB Firebase plan"
+    },
+    "/platform_settings/{settingKey}": {
+      "schema": {
+        "$ref": "#/entities/PlatformSetting"
+      },
+      "description": "Global country pricing, checkout links, and asset settings"
+    }
+  }
+}

@@ -1,0 +1,470 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-serif: 'Fraunces', 'Cormorant Garamond', Georgia, serif;
+    --font-sans: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-script: 'Dancing Script', 'Caveat', cursive;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #120408;
+    color: #fbf3ea;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, .font-serif {
+    font-family: var(--font-serif);
+    text-wrap: balance;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid #e2b96f;
+    outline-offset: 2px;
+  }
+
+  .font-script {
+    font-family: var(--font-script);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ch-float-blossom,
+  .ch-flutter-butterfly,
+  .ch-final-heart-beat,
+  .ch-pulse-heart,
+  .ch-marquee-left,
+  .ch-marquee-right {
+    animation: none !important;
+  }
+}
+
+/* =====================================================================
+   RESTORED RECIPIENT EXPERIENCE ANIMATIONS & KEYFRAMES (SCOPED)
+   ===================================================================== */
+
+@keyframes chPulseHeartSlow {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+@keyframes chHeartRing {
+  0% { transform: scale(0.75); opacity: 0.55; }
+  70% { opacity: 0; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+
+@keyframes chArrowFly {
+  0% { transform: translate(320px, -180px) rotate(-40deg) scale(0.7); opacity: 0; }
+  12% { opacity: 1; }
+  65% { transform: translate(60px, -28px) rotate(-31deg) scale(0.94); opacity: 1; }
+  100% { transform: translate(0, 0) rotate(-27deg) scale(1); opacity: 1; }
+}
+
+@keyframes chShakeX {
+  10%, 90% { transform: translateX(-4px); }
+  20%, 80% { transform: translateX(6px); }
+  30%, 50%, 70% { transform: translateX(-9px); }
+  40%, 60% { transform: translateX(9px); }
+}
+
+@keyframes chBurstHeart {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.35); }
+  100% { transform: scale(1.05); }
+}
+
+@keyframes chBlinkCursor {
+  50% { opacity: 0; }
+}
+
+@keyframes chFadeInUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes chSelfSpin {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@keyframes chTwinkle {
+  0%, 100% { opacity: 0; transform: scale(0.4); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes chAmbientGlow {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@keyframes chMarqueeLeft {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@keyframes chMarqueeRight {
+  from { transform: translateX(-50%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes chScrollBounce {
+  0%, 100% { transform: translateY(0); opacity: 0.55; }
+  50% { transform: translateY(8px); opacity: 1; }
+}
+
+@keyframes chGlowPulse {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.65; }
+  50% { transform: translate(-50%, -50%) scale(1.18); opacity: 1; }
+}
+
+@keyframes chHeartFall {
+  0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0; }
+  8% { opacity: 0.85; }
+  50% { transform: translateY(240px) translateX(18px) rotate(180deg); opacity: 0.85; }
+  92% { opacity: 0.85; }
+  100% { transform: translateY(500px) translateX(-12px) rotate(360deg); opacity: 0; }
+}
+
+@keyframes chHeartRiseUp {
+  0% { transform: translateY(0) translateX(0) rotate(0deg) scale(0.6); opacity: 0; }
+  12% { opacity: 0.9; }
+  85% { opacity: 0.85; }
+  100% { transform: translateY(-340px) translateX(22px) rotate(22deg) scale(1); opacity: 0; }
+}
+
+@keyframes chHeartTriple {
+  0% { transform: scale(1); }
+  15% { transform: scale(1.05); }
+  30% { transform: scale(1); }
+  45% { transform: scale(1.08); }
+  60% { transform: scale(1); }
+  78% { transform: scale(1.135); }
+  100% { transform: scale(1.07); }
+}
+
+@keyframes chGlowBeat {
+  0% { opacity: 0.5; transform: translate(-50%, -50%) scale(1); }
+  15% { opacity: 0.85; transform: translate(-50%, -50%) scale(1.08); }
+  45% { opacity: 0.95; transform: translate(-50%, -50%) scale(1.14); }
+  78% { opacity: 1; transform: translate(-50%, -50%) scale(1.26); }
+  100% { opacity: 0.9; transform: translate(-50%, -50%) scale(1.1); }
+}
+
+@keyframes chShock {
+  0% { opacity: 0.95; transform: translate(-50%, -50%) scale(0.4); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(22); }
+}
+
+/* 9 Restored Slideshow Transitions + Ken Burns */
+@keyframes chKenIn {
+  from { transform: scale(1) translate(0, 0); }
+  to { transform: scale(1.11) translate(-1.2%, -1%); }
+}
+
+@keyframes chKenOut {
+  from { transform: scale(1.11) translate(1.2%, 1%); }
+  to { transform: scale(1) translate(0, 0); }
+}
+
+@keyframes chFxFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes chFxSlideLeft { from { opacity: 0; transform: translateX(56px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes chFxSlideUp { from { opacity: 0; transform: translateY(48px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes chFxZoomIn { from { opacity: 0; transform: scale(0.88); } to { opacity: 1; transform: scale(1); } }
+@keyframes chFxZoomOut { from { opacity: 0; transform: scale(1.16); } to { opacity: 1; transform: scale(1); } }
+@keyframes chFxBlur { from { opacity: 0; filter: blur(18px); } to { opacity: 1; filter: blur(0); } }
+@keyframes chFxPolaroid { from { opacity: 0; transform: translateY(-34px) rotate(-6deg); } to { opacity: 1; transform: translateY(0) rotate(0); } }
+@keyframes chFxCircular { from { opacity: 0; clip-path: circle(0% at 50% 50%); } to { opacity: 1; clip-path: circle(75% at 50% 50%); } }
+@keyframes chFxHeartbeat {
+  0% { opacity: 0; transform: scale(0.9); }
+  45% { opacity: 1; transform: scale(1.04); }
+  70% { transform: scale(0.99); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.ch-tw-cursor {
+  animation: chBlinkCursor 1s step-start infinite;
+}
+
+.ch-loading-heart-wrap {
+  position: relative;
+  width: 104px;
+  height: 90px;
+  perspective: 700px;
+  animation: chPulseHeartSlow 2.4s ease-in-out infinite;
+}
+
+.ch-loading-heart-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -32px;
+  border-radius: 50%;
+  border: 1px solid rgba(194, 24, 91, 0.32);
+  animation: chHeartRing 2.4s ease-out infinite;
+  pointer-events: none;
+}
+
+.ch-loading-heart-wrap.impact {
+  animation: none;
+  transform: scale(1.3);
+  transition: transform 380ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.ch-heart-half {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transition: transform 1900ms cubic-bezier(0.16, 1, 0.3, 1), opacity 1200ms ease 420ms;
+}
+
+.ch-heart-half-left {
+  clip-path: inset(0 50% 0 0);
+  transform-origin: right center;
+}
+
+.ch-heart-half-right {
+  clip-path: inset(0 0 0 50%);
+  transform-origin: left center;
+}
+
+.ch-heart-open .ch-heart-half-left {
+  transform: rotateY(-120deg) translateX(-8px);
+  opacity: 0;
+}
+
+.ch-heart-open .ch-heart-half-right {
+  transform: rotateY(120deg) translateX(8px);
+  opacity: 0;
+}
+
+.ch-heart-burst {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(circle, #fff8ec 0%, rgba(255, 222, 180, 0.5) 40%, rgba(255, 222, 180, 0) 72%);
+  transition: opacity 340ms ease, transform 1700ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ch-heart-open .ch-heart-burst {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(18);
+}
+
+.ch-cupid-arrow {
+  animation: chArrowFly 1350ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.3)) drop-shadow(0 0 10px rgba(232, 194, 122, 0.55));
+}
+
+.ch-shake {
+  animation: chShakeX 0.5s ease;
+}
+
+.ch-burst-heart {
+  animation: chBurstHeart 0.6s ease;
+}
+
+.ch-pulse-heart {
+  animation: chPulseHeartSlow 2.2s ease-in-out infinite;
+}
+
+.ch-flower-self {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  animation-name: chSelfSpin;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  filter: drop-shadow(0 3px 10px rgba(194, 24, 91, 0.38));
+}
+
+.ch-sparkle {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff8ec 0%, rgba(255, 248, 236, 0) 72%);
+  animation-name: chTwinkle;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.ch-marquee-left {
+  animation: chMarqueeLeft 54s linear infinite;
+}
+
+.ch-marquee-right {
+  animation: chMarqueeRight 62s linear infinite;
+}
+
+.ch-envelope {
+  position: relative;
+  width: 272px;
+  height: 180px;
+  cursor: pointer;
+  perspective: 1000px;
+  transition: transform 0.3s ease;
+}
+
+.ch-envelope:hover {
+  transform: translateY(-4px);
+}
+
+.ch-envelope-body {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background: linear-gradient(155deg, #f6ead9, #e0c9a8);
+  box-shadow: 0 24px 46px rgba(0, 0, 0, 0.45);
+}
+
+.ch-envelope-pocket {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 62%;
+  border-radius: 0 0 6px 6px;
+  background: linear-gradient(180deg, #eeddc4, #e0c9a8);
+  clip-path: polygon(0 42%, 50% 0, 100% 42%, 100% 100%, 0 100%);
+  z-index: 3;
+}
+
+.ch-envelope-flap {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-left: 136px solid transparent;
+  border-right: 136px solid transparent;
+  border-top: 100px solid #d8bd97;
+  transform-origin: top center;
+  transition: transform 1200ms cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 4;
+}
+
+.ch-envelope.open .ch-envelope-flap {
+  transform: rotateX(180deg);
+  z-index: 1;
+}
+
+.ch-envelope-seal {
+  position: absolute;
+  top: 58%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #d8306a, #96123f);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+  z-index: 5;
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+.ch-envelope.open .ch-envelope-seal {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(1.4);
+}
+
+.ch-envelope-note {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 16px;
+  height: 58%;
+  border-radius: 3px;
+  background: #fffaf1;
+  z-index: 2;
+  transform: translateY(0);
+  transition: transform 900ms cubic-bezier(0.4, 0, 0.2, 1) 500ms;
+}
+
+.ch-envelope.open .ch-envelope-note {
+  transform: translateY(-28px);
+}
+
+.ch-collage-beating {
+  animation: chHeartTriple 3200ms cubic-bezier(0.4, 0, 0.3, 1) forwards;
+}
+
+.ch-glow-beating {
+  animation: chGlowBeat 3200ms cubic-bezier(0.4, 0, 0.3, 1) forwards;
+}
+
+.ch-shockwave-go {
+  animation: chShock 1100ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.ch-kb-in {
+  animation: chKenIn 7s ease-out both;
+}
+
+.ch-kb-out {
+  animation: chKenOut 7s ease-out both;
+}
+
+.ch-fx-fade { animation: chFxFade 1200ms ease both; }
+.ch-fx-slide-left { animation: chFxSlideLeft 1100ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.ch-fx-slide-up { animation: chFxSlideUp 1100ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.ch-fx-zoom-in { animation: chFxZoomIn 1150ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.ch-fx-zoom-out { animation: chFxZoomOut 1150ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.ch-fx-blur-focus { animation: chFxBlur 1300ms ease both; }
+.ch-fx-polaroid { animation: chFxPolaroid 1250ms cubic-bezier(0.34, 1.05, 0.64, 1) both; }
+.ch-fx-circular { animation: chFxCircular 1300ms ease both; }
+.ch-fx-heartbeat { animation: chFxHeartbeat 1300ms cubic-bezier(0.3, 1.1, 0.5, 1) both; }
+
+/* Original Sales Page Floating Blossom, Butterfly & Heart Animations */
+@keyframes chFloatBlossom {
+  0%, 100% { transform: translateY(0) rotate(-6deg); }
+  50% { transform: translateY(-9px) rotate(-2deg); }
+}
+
+@keyframes chFlutterButterfly {
+  0%, 100% { transform: translate(0, 0) rotate(6deg) scale(1); }
+  50% { transform: translate(-5px, -11px) rotate(13deg) scale(1.05); }
+}
+
+@keyframes chFinalHeartBeat {
+  0%, 100% { transform: scale(1) rotate(-3deg); }
+  50% { transform: scale(1.06) rotate(2deg); }
+}
+
+@keyframes chFormHighlightPulse {
+  0% { box-shadow: 0 20px 50px -18px rgba(90, 26, 44, 0.22), 0 0 0 0 rgba(185, 138, 78, 0.65); }
+  50% { box-shadow: 0 24px 60px -14px rgba(90, 26, 44, 0.34), 0 0 0 8px rgba(185, 138, 78, 0.25); }
+  100% { box-shadow: 0 20px 50px -18px rgba(90, 26, 44, 0.22), 0 0 0 0 rgba(185, 138, 78, 0); }
+}
+
+.ch-float-blossom {
+  animation: chFloatBlossom 7s ease-in-out infinite;
+}
+
+.ch-flutter-butterfly {
+  animation: chFlutterButterfly 5.5s ease-in-out infinite;
+}
+
+.ch-final-heart-beat {
+  animation: chFinalHeartBeat 4.2s ease-in-out infinite;
+}
+
+.ch-form-locked-highlight {
+  animation: chFormHighlightPulse 1.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+

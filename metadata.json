@@ -1,0 +1,6 @@
+{
+  "name": "Chasing Her",
+  "description": "Digital love letter websites made from your photos, words, music, and memories.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

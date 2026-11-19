@@ -1,0 +1,373 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'shittu.cfm@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'createdAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidCustomerOrder(data) {
+      return data.keys().hasAll([
+          'id',
+          'ownerId',
+          'slug',
+          'product',
+          'build_product',
+          'full_name',
+          'whatsapp',
+          'email',
+          'country',
+          'status',
+          'progress',
+          'pin',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'ownerId',
+          'slug',
+          'product',
+          'build_product',
+          'full_name',
+          'whatsapp',
+          'email',
+          'country',
+          'status',
+          'progress',
+          'progress_note',
+          'pin',
+          'hosted_url',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        (data.ownerId == request.auth.uid || isAdmin()) &&
+        data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 128 && data.slug.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.product in ['chasing-her', 'memories', 'custom'] &&
+        data.build_product in ['chasing-her', 'memories'] &&
+        data.full_name is string && data.full_name.size() >= 1 && data.full_name.size() <= 160 &&
+        data.whatsapp is string && data.whatsapp.size() >= 5 && data.whatsapp.size() <= 32 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.country in ['gh', 'ke', 'ng'] &&
+        data.status in ['pending_payment', 'paid', 'hosted', 'expired'] &&
+        data.progress in ['received', 'building', 'review', 'hosted'] &&
+        (!('progress_note' in data) || (data.progress_note is string && data.progress_note.size() <= 1000)) &&
+        data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 6 && data.pin.matches('^[0-9]{4,6}$') &&
+        (!('hosted_url' in data) || (data.hosted_url is string && data.hosted_url.size() <= 2048)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidChasingHerProject(data) {
+      return data.keys().hasAll([
+          'slug',
+          'ownerId',
+          'pin',
+          'intro_message',
+          'letter_title',
+          'letter_body',
+          'final_message',
+          'storedBytes',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'slug',
+          'ownerId',
+          'pin',
+          'intro_message',
+          'letter_title',
+          'letter_body',
+          'final_message',
+          'music_url',
+          'payloadJson',
+          'storedBytes',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 128 && data.slug.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId == request.auth.uid &&
+        data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 6 && data.pin.matches('^[0-9]{4,6}$') &&
+        data.intro_message is string && data.intro_message.size() >= 1 && data.intro_message.size() <= 500 &&
+        data.letter_title is string && data.letter_title.size() >= 1 && data.letter_title.size() <= 200 &&
+        data.letter_body is string && data.letter_body.size() >= 1 && data.letter_body.size() <= 10000 &&
+        data.final_message is string && data.final_message.size() >= 1 && data.final_message.size() <= 500 &&
+        (!('music_url' in data) || (data.music_url is string && data.music_url.size() <= 2048)) &&
+        (!('payloadJson' in data) || (data.payloadJson is string && data.payloadJson.size() <= 350000)) &&
+        data.storedBytes is int && data.storedBytes >= 0 && data.storedBytes <= 52428800 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMemoriesProject(data) {
+      return data.keys().hasAll([
+          'slug',
+          'ownerId',
+          'pin',
+          'hero_title',
+          'hero_subtitle',
+          'collage_names',
+          'letter_title',
+          'letter_body',
+          'final_message',
+          'storedBytes',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'slug',
+          'ownerId',
+          'pin',
+          'hero_title',
+          'hero_subtitle',
+          'collage_names',
+          'letter_title',
+          'letter_body',
+          'final_message',
+          'payloadJson',
+          'storedBytes',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 128 && data.slug.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId == request.auth.uid &&
+        data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 6 && data.pin.matches('^[0-9]{4,6}$') &&
+        data.hero_title is string && data.hero_title.size() >= 1 && data.hero_title.size() <= 200 &&
+        data.hero_subtitle is string && data.hero_subtitle.size() >= 1 && data.hero_subtitle.size() <= 500 &&
+        data.collage_names is string && data.collage_names.size() >= 1 && data.collage_names.size() <= 160 &&
+        data.letter_title is string && data.letter_title.size() >= 1 && data.letter_title.size() <= 200 &&
+        data.letter_body is string && data.letter_body.size() >= 1 && data.letter_body.size() <= 10000 &&
+        data.final_message is string && data.final_message.size() >= 1 && data.final_message.size() <= 500 &&
+        (!('payloadJson' in data) || (data.payloadJson is string && data.payloadJson.size() <= 350000)) &&
+        data.storedBytes is int && data.storedBytes >= 0 && data.storedBytes <= 52428800 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMediaAssetRecord(data) {
+      return data.keys().hasAll([
+          'id',
+          'ownerId',
+          'projectSlug',
+          'fileName',
+          'contentType',
+          'originalBytes',
+          'storedBytes',
+          'width',
+          'height',
+          'url',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'ownerId',
+          'projectSlug',
+          'fileName',
+          'contentType',
+          'originalBytes',
+          'storedBytes',
+          'width',
+          'height',
+          'url',
+          'createdAt'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId == request.auth.uid &&
+        data.projectSlug is string && data.projectSlug.size() >= 1 && data.projectSlug.size() <= 128 && data.projectSlug.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 255 &&
+        data.contentType is string && data.contentType.size() >= 3 && data.contentType.size() <= 100 &&
+        data.originalBytes is int && data.originalBytes >= 0 && data.originalBytes <= 104857600 &&
+        data.storedBytes is int && data.storedBytes >= 0 && data.storedBytes <= 52428800 &&
+        data.width is int && data.width >= 0 && data.width <= 12000 &&
+        data.height is int && data.height >= 0 && data.height <= 12000 &&
+        data.url is string && data.url.size() >= 1 && data.url.size() <= 2048 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidPlatformSetting(data) {
+      return data.keys().hasAll(['key', 'value', 'updatedAt']) &&
+        data.keys().hasOnly(['key', 'value', 'updatedAt']) &&
+        data.key is string && data.key.size() >= 1 && data.key.size() <= 128 && data.key.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.value is string && data.value.size() <= 5000 &&
+        data.updatedAt is timestamp;
+    }
+
+    match /admins/{adminId} {
+      allow get: if isVerifiedUser() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidId(adminId) && isValidAdminUser(incoming()) && incoming().uid == adminId && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(adminId);
+    }
+
+    match /orders/{orderId} {
+      allow get: if isVerifiedUser() && isValidId(orderId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(orderId) &&
+        isValidCustomerOrder(incoming()) &&
+        incoming().id == orderId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() &&
+        isValidId(orderId) &&
+        isValidCustomerOrder(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().slug == existing().slug &&
+        incoming().product == existing().product &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().build_product == existing().build_product &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'progress',
+              'progress_note',
+              'pin',
+              'hosted_url',
+              'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(orderId);
+    }
+
+    match /projects/{projectId} {
+      allow get: if isVerifiedUser() && isValidId(projectId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(projectId) &&
+        isValidChasingHerProject(incoming()) &&
+        incoming().slug == projectId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() &&
+        isValidId(projectId) &&
+        isValidChasingHerProject(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().slug == existing().slug &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'pin',
+              'intro_message',
+              'letter_title',
+              'letter_body',
+              'final_message',
+              'music_url',
+              'payloadJson',
+              'storedBytes',
+              'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerifiedUser() && isValidId(projectId) && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /memory_projects/{projectId} {
+      allow get: if isVerifiedUser() && isValidId(projectId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(projectId) &&
+        isValidMemoriesProject(incoming()) &&
+        incoming().slug == projectId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() &&
+        isValidId(projectId) &&
+        isValidMemoriesProject(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().slug == existing().slug &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'pin',
+              'hero_title',
+              'hero_subtitle',
+              'collage_names',
+              'letter_title',
+              'letter_body',
+              'final_message',
+              'payloadJson',
+              'storedBytes',
+              'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerifiedUser() && isValidId(projectId) && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /media_records/{recordId} {
+      allow get: if isVerifiedUser() && isValidId(recordId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(recordId) &&
+        isValidMediaAssetRecord(incoming()) &&
+        incoming().id == recordId &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isVerifiedUser() && isValidId(recordId) && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /platform_settings/{settingKey} {
+      allow get, list: if true;
+      allow create, update: if isAdmin() &&
+        isValidId(settingKey) &&
+        isValidPlatformSetting(incoming()) &&
+        incoming().key == settingKey &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(settingKey);
+    }
+  }
+}
