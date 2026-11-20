@@ -67,14 +67,14 @@ const RECONCILE_STORIES = [
     badge: 'STORY 03 · SINCERE EFFORT',
     roleLabel: 'Showing real thought & time',
     whatsappSent:
-      'I took some time to build this for you. The passcode is the day we first met: chasingher.love/temi',
+      'I took some time to build this for you. The passcode is the day we first met: chasingher.love/amina',
     whatsappReply:
       "You actually took the time to make all of this for me? I didn't expect this at all... thank you ❤️",
     headline:
       '"She told me it was the first time she truly felt how much she meant to me without me trying to argue my point."',
     body: "I'm not a programmer or a poet, so I used the guided builder. In 25 minutes I had a private, PIN-protected love letter with our Polaroids and songs that showed genuine care.",
-    author: 'Tobi A.',
-    location: 'Victoria Island, Lagos 🇳🇬',
+    author: 'Samuel O.',
+    location: 'Nyali, Mombasa 🇰🇪',
     previewTarget: 'chasing-her' as const,
   },
 ] as const;
@@ -165,219 +165,163 @@ export const ReconcileSalesCampaignContent: React.FC<ReconcileSalesCampaignConte
   return (
     <>
       {/* =====================================================================
-          OPENING — ARE YOU ABOUT TO LOSE HER? (Heirloom Stationery Dispatch)
+          HERO — CLEAR ABOVE-THE-FOLD OPENING (ARE YOU ABOUT TO LOSE HER?)
          ===================================================================== */}
-      <header className="relative pt-8 pb-16 md:pt-14 md:pb-24 px-4 sm:px-6 overflow-hidden">
-        {/* Signature Floating Blossom & Butterfly Assets */}
+      <header className="relative pt-10 pb-14 md:pt-16 md:pb-20 px-4 sm:px-6 overflow-hidden">
         <img
           src={SALES_PAGE_ASSETS.heroBlossom}
           alt=""
           aria-hidden="true"
-          className="pointer-events-none select-none absolute -top-3 -left-7 sm:-top-2 sm:left-2 md:left-8 w-20 sm:w-36 md:w-44 opacity-90 ch-float-blossom z-0"
-          style={{ filter: 'drop-shadow(0 12px 22px rgba(90,26,44,0.18))' }}
+          className="pointer-events-none select-none hidden xl:block absolute -top-4 -left-8 w-36 opacity-45 ch-float-blossom z-0"
+          style={{ filter: 'drop-shadow(0 12px 22px rgba(90,26,44,0.14))' }}
         />
         <img
           src={SALES_PAGE_ASSETS.heroButterfly}
           alt=""
           aria-hidden="true"
-          className="pointer-events-none select-none absolute top-1 -right-5 sm:top-4 sm:right-4 md:right-10 w-18 sm:w-32 md:w-40 opacity-90 ch-flutter-butterfly z-0"
-          style={{ filter: 'drop-shadow(0 12px 22px rgba(90,26,44,0.18))' }}
+          className="pointer-events-none select-none hidden xl:block absolute top-8 -right-6 w-32 opacity-45 ch-flutter-butterfly z-0"
+          style={{ filter: 'drop-shadow(0 12px 22px rgba(90,26,44,0.14))' }}
         />
 
-        <div className="max-w-5xl mx-auto relative z-10">
-          {/* Brand Crest */}
-          <div className="text-center mb-6 px-12 sm:px-0">
-            <div className="inline-flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 text-[10px] sm:text-[11px] uppercase tracking-[0.2em] text-[#7A5A47] font-semibold">
-              <span>Chasing Her</span>
-              <span className="text-[#B98A4E]">♥</span>
-              <span>Some Feelings Deserve More Than A Message · {countryConfig.name} Edition</span>
+        <div className="max-w-4xl mx-auto relative z-10 space-y-10">
+          {/* Centered Opening Headline, Subheadline & Actions */}
+          <div className="max-w-3xl mx-auto text-center space-y-5">
+            <p className="text-[11px] sm:text-xs uppercase tracking-[0.22em] text-[#9A6F3B] font-bold">
+              Private Digital Love Letter
+            </p>
+
+            <h1 className="font-serif text-[clamp(2.5rem,5.4vw,4.35rem)] leading-[1.06] text-[#2B1710] tracking-tight text-balance">
+              Are you about to{' '}
+              <em className="italic text-[#5A1A2C] font-medium">lose her?</em>
+            </h1>
+
+            <p className="text-lg sm:text-xl leading-relaxed text-[#5C4033] max-w-2xl mx-auto text-balance">
+              Are you afraid she&apos;s already moved on — and most importantly,{' '}
+              <strong className="text-[#2B1710] font-semibold">do you still love her?</strong>{' '}
+              Give your words a quiet, private space she&apos;ll actually open.
+            </p>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => onOpenInstantCheckout('chasing-her')}
+                className="py-4 px-7 rounded-full bg-gradient-to-b from-[#6E2236] to-[#5A1A2C] text-[#FBF3EA] font-bold text-sm sm:text-base shadow-[0_14px_30px_-10px_rgba(90,26,44,0.55),inset_0_1px_0_rgba(255,255,255,0.2)] hover:-translate-y-0.5 transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span>Create Her Love Letter</span>
+                <ArrowRight className="w-4 h-4 text-[#DCC397]" />
+              </button>
+
+              <button
+                type="button"
+                onClick={onScrollToDemonstration}
+                className="py-4 px-6 rounded-full bg-[#FFFDF9] border border-[#5A1A2C]/22 text-[#5A1A2C] font-bold text-sm hover:bg-[#F5DAD5]/40 transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5 fill-[#5A1A2C]" />
+                <span>See How It Works</span>
+              </button>
             </div>
+
+            <p className="text-xs sm:text-sm text-[#7A5A47] flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
+              <span className="whitespace-nowrap">
+                One-time <strong className="text-[#5A1A2C]">{funnel.pricePage}</strong>{' '}
+                <span className="line-through opacity-60">{funnel.priceWas}</span>
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="whitespace-nowrap">PIN-protected</span>
+              <span className="hidden sm:inline" aria-hidden="true">·</span>
+              <span className="whitespace-nowrap">Ready in minutes</span>
+            </p>
           </div>
 
-          {/* Heirloom Stationery Letter Card */}
-          <div className="bg-[#FFFDF9] border-2 border-[#B98A4E]/35 rounded-[32px] p-5 sm:p-10 md:p-12 shadow-[0_30px_80px_-25px_rgba(43,23,16,0.24)] relative">
-            {/* Inner Gold Hairline Frame */}
-            <div className="pointer-events-none absolute inset-2.5 sm:inset-4 rounded-[24px] border border-[#5A1A2C]/10" />
+          {/* Centered Product Preview Showcase */}
+          <div className="max-w-3xl mx-auto rounded-[26px] overflow-hidden border border-[#B98A4E]/40 shadow-[0_24px_60px_-20px_rgba(43,23,16,0.38)] bg-[#280913] text-[#FBF3EA] grid grid-cols-1 md:grid-cols-12 items-stretch">
+            <div className="md:col-span-7 bg-[#1A050B]">
+              <img
+                src={SALES_PAGE_ASSETS.heroShot}
+                alt="Preview of a Chasing Her digital love letter website shown on laptop and phone, with photos, a song, and a heartfelt letter"
+                className="w-full h-full object-cover block"
+              />
+            </div>
 
-            {/* Top Wax Seal & Dispatch Header */}
-            <div className="relative z-10 flex flex-wrap items-center justify-between gap-4 pb-6 mb-7 border-b border-[#5A1A2C]/12">
-              <div className="flex items-center gap-3.5">
-                <div
-                  className="w-12 h-12 rounded-full flex items-center justify-center text-[#FBF3EA] font-serif font-bold text-sm shadow-md shrink-0"
-                  style={{
-                    background: 'radial-gradient(circle at 35% 30%, #C2185B, #5A1A2C)',
-                    boxShadow:
-                      '0 6px 14px rgba(90,26,44,0.35), inset 0 1px 2px rgba(255,255,255,0.3)',
-                  }}
+            <div className="md:col-span-5 p-6 bg-gradient-to-b from-[#33101B] to-[#220810] flex flex-col justify-center space-y-4">
+              <div className="space-y-1.5">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-[#DCC397] font-bold">
+                  What She Discovers Piece By Piece
+                </div>
+                <div className="text-base font-serif italic text-[#FBF3EA] leading-relaxed">
+                  Her Name · Your Words · Your Photos · Your Song · Wax-Sealed Letter
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-1 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => onOpenLivePreviewModal('chasing-her')}
+                  className="py-2.5 px-3.5 rounded-xl bg-white/10 hover:bg-white/16 border border-[#DCC397]/30 text-[#FBF3EA] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
                 >
-                  ♥ CH
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase tracking-[0.2em] text-[#B98A4E] font-bold">
-                    Personal Dispatch · When Words Aren&apos;t Reaching Her
-                  </div>
-                  <div className="font-serif italic text-xl sm:text-2xl text-[#5A1A2C] font-medium">
-                    For: The Man Who Still Loves Her
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 text-xs text-[#7A5A47] font-medium">
-                <span>Private Digital Love Letter</span>
-                <span aria-hidden="true">·</span>
-                <strong className="text-[#5A1A2C] font-bold">{funnel.pricePage}</strong>
-              </div>
-            </div>
-
-            {/* Main Campaign Headline */}
-            <div className="relative z-10 max-w-4xl mb-8">
-              <h1 className="font-serif text-3xl sm:text-5xl md:text-[52px] leading-[1.1] text-[#2B1710] tracking-tight mb-4">
-                ARE YOU ABOUT TO <em className="italic text-[#5A1A2C] font-medium">LOSE HER?</em>
-              </h1>
-
-              <div className="space-y-2 text-lg sm:text-2xl font-serif text-[#5A1A2C]">
-                <p className="font-semibold">
-                  Are you afraid she&apos;s already moved on?
-                </p>
-                <p className="text-[#2B1710]">
-                  And most importantly...{' '}
-                  <strong className="text-[#5A1A2C] underline decoration-[#B98A4E] decoration-2 underline-offset-4">
-                    do you still love her?
-                  </strong>
-                </p>
-              </div>
-            </div>
-
-            {/* Two-Column Editorial Letter + Interactive Experience Showcase */}
-            <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
-              {/* Left Column: The Emotional Story Letter */}
-              <div className="lg:col-span-7 space-y-4 text-[16px] sm:text-[17px] leading-[1.78] text-[#2B1710]">
-                <p>
-                  Almost every man has, at some point, found himself in a situation where the woman he loves is so upset with him that she no longer replies to his texts or picks up his calls.
-                </p>
-                <p className="font-semibold text-[#5A1A2C] text-lg">
-                  She leaves his messages unanswered.
-                </p>
-                <p>And it leaves him wondering...</p>
-
-                {/* Dramatic Internal Question Pull-Quote */}
-                <blockquote className="my-5 p-6 sm:p-7 rounded-[24px] bg-gradient-to-br from-[#5A1A2C] via-[#431220] to-[#280913] text-[#FBF3EA] shadow-xl border border-[#B98A4E]/40 relative overflow-hidden">
-                  <div className="text-[#DCC397]/25 font-serif text-7xl leading-none absolute -top-2 left-3 select-none">
-                    &ldquo;
-                  </div>
-                  <p className="relative z-10 font-serif italic text-xl sm:text-2xl leading-relaxed text-[#FBF3EA]">
-                    Is this it? Is my relationship with the woman I love coming to a painful end?
-                  </p>
-                </blockquote>
-
-                <p className="font-serif text-xl sm:text-2xl text-[#5A1A2C] font-medium">
-                  But the truth is, you still want to give it one more try.
-                </p>
-                <p className="font-semibold text-[#2B1710]">
-                  You don&apos;t want it to end.
-                </p>
-                <p>
-                  You still love her. You still want to tell her how much she means to you. And most importantly, you want to remind her of how beautiful what you both shared was... and that, despite your mistakes, you still believe what you have together is worth fighting for.
-                </p>
-                <p>
-                  Because sometimes, when emotions are high and hurt has taken over, you wish you could find a way to make her pause for a moment...
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 my-5">
-                  <div className="p-4 rounded-2xl bg-[#F5E9DC] border border-[#5A1A2C]/12 text-xs sm:text-sm font-semibold text-[#5A1A2C]">
-                    ✦ To remember the beautiful moments you shared.
-                  </div>
-                  <div className="p-4 rounded-2xl bg-[#F5E9DC] border border-[#5A1A2C]/12 text-xs sm:text-sm font-semibold text-[#5A1A2C]">
-                    ✦ To remember the love that once made you both so happy.
-                  </div>
-                  <div className="p-4 rounded-2xl bg-[#5A1A2C] text-[#FBF3EA] text-xs sm:text-sm font-semibold shadow-sm">
-                    ✦ And to hear what you&apos;ve been struggling to tell her all this time.
-                  </div>
-                </div>
-              </div>
-
-              {/* Right Column: Sticky Experience Card + Instant Checkout & Demo Triggers */}
-              <div className="lg:col-span-5 lg:sticky lg:top-20 space-y-4">
-                <div className="rounded-[24px] overflow-hidden border-2 border-[#B98A4E]/40 shadow-[0_24px_60px_-20px_rgba(43,23,16,0.4)] bg-[#280913] text-[#FBF3EA] relative">
-                  <div className="px-4 py-2.5 bg-[#1B050C] border-b border-[#B98A4E]/25 flex items-center justify-between text-[11px]">
-                    <span className="text-[#DCC397] font-semibold tracking-wider uppercase">
-                      ✦ More Personal Than Another Text
-                    </span>
-                    <span className="text-[#FBF3EA]/80 font-mono">
-                      PIN Protected
-                    </span>
-                  </div>
-
-                  <img
-                    src={SALES_PAGE_ASSETS.heroShot}
-                    alt="Preview of a Chasing Her digital love letter website shown on laptop and phone, with photos, a song, and a heartfelt letter"
-                    className="w-full h-auto block"
-                  />
-
-                  <div className="p-5 bg-gradient-to-b from-[#33101B] to-[#220810] space-y-3">
-                    <div>
-                      <div className="text-[11px] uppercase tracking-widest text-[#DCC397] font-bold">
-                        What She Discovers Piece By Piece
-                      </div>
-                      <div className="text-sm font-serif italic text-[#FBF3EA]">
-                        Her Name + Your Words + Your Photos + Our Song + Wax-Sealed Letter
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => onOpenLivePreviewModal('chasing-her')}
-                        className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 border border-[#DCC397]/30 text-[#FBF3EA] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-[#DCC397] text-[#DCC397]" />
-                        <span>Live Sample 01</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onOpenLivePreviewModal('memories')}
-                        className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 border border-[#DCC397]/30 text-[#FBF3EA] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                      >
-                        <Heart className="w-3.5 h-3.5 fill-[#E1A6A3] text-[#E1A6A3]" />
-                        <span>Live Sample 02</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Primary CTA & Builder Demo Trigger */}
-                <div className="p-5 rounded-[24px] bg-[#F5E9DC] border border-[#5A1A2C]/15 shadow-sm space-y-3">
-                  <button
-                    type="button"
-                    onClick={() => onOpenInstantCheckout('chasing-her')}
-                    className="w-full py-4 px-6 rounded-full bg-gradient-to-b from-[#6E2236] to-[#5A1A2C] text-[#FBF3EA] font-bold text-base shadow-[0_14px_30px_-10px_rgba(90,26,44,0.55),inset_0_1px_0_rgba(255,255,255,0.22)] hover:-translate-y-0.5 transition flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>Create Your Love Letter Now</span>
-                    <ArrowRight className="w-4 h-4 text-[#DCC397]" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={onScrollToDemonstration}
-                    className="w-full py-3 px-5 rounded-full bg-[#FFFBF6] border border-[#5A1A2C]/25 text-[#5A1A2C] font-bold text-xs sm:text-sm hover:bg-[#F5DAD5]/40 transition flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-[#5A1A2C]" />
-                    <span>[SEE THE BUILDER DEMONSTRATION]</span>
-                  </button>
-
-                  <div className="flex items-center justify-between text-[11px] text-[#7A5A47] pt-1 px-1">
-                    <span>
-                      Access: <strong className="text-[#5A1A2C]">{funnel.pricePage}</strong>{' '}
-                      <span className="line-through opacity-65">{funnel.priceWas}</span>
-                    </span>
-                    <span>Unlocks My Site immediately after payment</span>
-                  </div>
-                </div>
+                  <Play className="w-3.5 h-3.5 fill-[#DCC397] text-[#DCC397]" />
+                  <span>Live Sample 01</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenLivePreviewModal('memories')}
+                  className="py-2.5 px-3.5 rounded-xl bg-white/10 hover:bg-white/16 border border-[#DCC397]/30 text-[#FBF3EA] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                >
+                  <Heart className="w-3.5 h-3.5 fill-[#E1A6A3] text-[#E1A6A3]" />
+                  <span>Live Sample 02</span>
+                </button>
               </div>
             </div>
           </div>
         </div>
       </header>
+
+      {/* =====================================================================
+          OPENING STORY — BREATHABLE EDITORIAL LETTER (RIGHT BELOW THE HERO)
+         ===================================================================== */}
+      <section className="py-14 md:py-20 px-4 sm:px-6 border-t border-[#5A1A2C]/10 bg-[#FFFDF9]/80">
+        <div className="max-w-2xl mx-auto space-y-5 text-[16px] sm:text-[18px] leading-[1.82] text-[#2B1710]">
+          <p>
+            Almost every man has, at some point, found himself in a situation where the woman he loves is so upset with him that she no longer replies to his texts or picks up his calls.
+          </p>
+          <p className="font-semibold text-[#5A1A2C] text-lg sm:text-xl">
+            She leaves his messages unanswered.
+          </p>
+          <p>And it leaves him wondering...</p>
+
+          <blockquote className="my-6 p-6 sm:p-8 rounded-[24px] bg-gradient-to-br from-[#5A1A2C] via-[#431220] to-[#280913] text-[#FBF3EA] shadow-xl border border-[#B98A4E]/40 relative overflow-hidden">
+            <div className="text-[#DCC397]/25 font-serif text-7xl leading-none absolute -top-2 left-3 select-none">
+              &ldquo;
+            </div>
+            <p className="relative z-10 font-serif italic text-xl sm:text-2xl leading-relaxed text-[#FBF3EA]">
+              Is this it? Is my relationship with the woman I love coming to a painful end?
+            </p>
+          </blockquote>
+
+          <p className="font-serif text-xl sm:text-2xl text-[#5A1A2C] font-medium">
+            But the truth is, you still want to give it one more try.
+          </p>
+          <p className="font-semibold text-[#2B1710]">You don&apos;t want it to end.</p>
+          <p>
+            You still love her. You still want to tell her how much she means to you. And most importantly, you want to remind her of how beautiful what you both shared was — and that, despite your mistakes, you still believe what you have together is worth fighting for.
+          </p>
+          <p>
+            Because sometimes, when emotions are high and hurt has taken over, you wish you could find a way to make her pause for a moment:
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+            <div className="p-4 rounded-2xl bg-[#F5E9DC] border border-[#5A1A2C]/12 text-xs sm:text-sm font-semibold text-[#5A1A2C]">
+              To remember the beautiful moments you shared.
+            </div>
+            <div className="p-4 rounded-2xl bg-[#F5E9DC] border border-[#5A1A2C]/12 text-xs sm:text-sm font-semibold text-[#5A1A2C]">
+              To remember the love that once made you both so happy.
+            </div>
+            <div className="p-4 rounded-2xl bg-[#5A1A2C] text-[#FBF3EA] text-xs sm:text-sm font-semibold shadow-sm">
+              And to hear what you&apos;ve been struggling to tell her all this time.
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* =====================================================================
           SECTION 01 — BUT HOW DO YOU TELL HER ALL OF THIS?

@@ -6,7 +6,9 @@ import {
   Wand2,
 } from 'lucide-react';
 import {
+  ACTIVE_COUNTRIES,
   CountryCode,
+  resolveCountryFromLocation,
   ChasingHerProjectData,
   MemoriesProjectData,
   MusicLibraryTrack,
@@ -46,12 +48,9 @@ export function App() {
     return 'order';
   });
 
-  const [country, setCountry] = useState<CountryCode>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const c = params.get('country');
-    if (c === 'gh' || c === 'ke' || c === 'ng') return c;
-    return 'gh';
-  });
+  const [country, setCountry] = useState<CountryCode>(() =>
+    resolveCountryFromLocation(window.location.search, window.location.pathname)
+  );
 
   const [autoStart] = useState<boolean>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -316,7 +315,7 @@ export function App() {
                 role="group"
                 aria-label="Select country market"
               >
-                {(['gh', 'ke', 'ng'] as CountryCode[]).map((c) => (
+                {ACTIVE_COUNTRIES.map((c) => (
                   <button
                     key={c}
                     type="button"
@@ -327,7 +326,7 @@ export function App() {
                         : 'text-[#FBF3EA]/65 hover:text-[#FBF3EA]'
                     }`}
                   >
-                    {c === 'gh' ? 'GH' : c === 'ke' ? 'KE' : 'NG'}
+                    {c === 'gh' ? 'GH' : 'KE'}
                   </button>
                 ))}
               </div>

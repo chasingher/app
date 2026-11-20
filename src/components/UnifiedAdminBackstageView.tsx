@@ -32,9 +32,12 @@ import {
   LogOut,
   Store,
   UserCheck,
+  Copy,
+  Check,
 } from 'lucide-react';
 import {
   COUNTRIES,
+  ACTIVE_COUNTRIES,
   CountryCode,
   OrderProgressStage,
   ChasingHerProjectData,
@@ -136,7 +139,7 @@ const PROGRESS_STAGES: { id: OrderProgressStage; label: string; short: string }[
 const TAB_TITLES: Record<AdminTab, { title: string; subtitle: string }> = {
   orders: {
     title: 'Orders & Fulfillment',
-    subtitle: 'Verify payments, advance build stages, and deliver live links across Ghana, Kenya & Nigeria.',
+    subtitle: 'Verify payments, advance build stages, and deliver live links across Ghana & Kenya.',
   },
   studio: {
     title: 'Site Builder Studio',
@@ -155,8 +158,8 @@ const TAB_TITLES: Record<AdminTab, { title: string; subtitle: string }> = {
     subtitle: 'Inspect your connected Firestore database, compressed WebP media objects, and storage headroom.',
   },
   countries: {
-    title: 'Regional Markets (GH / KE / NG)',
-    subtitle: 'Configure localized pricing, checkout payment URLs, and post-order routing per country.',
+    title: 'Regional Markets (GH & KE)',
+    subtitle: 'Direct sales page entry links, localized pricing, and checkout routing for Ghana & Kenya.',
   },
 };
 
@@ -243,6 +246,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   // Country settings state
   const [localSettings, setLocalSettings] = useState<Record<string, string>>(settingsMap);
   const [countrySaveFeedback, setCountrySaveFeedback] = useState<string | null>(null);
+  const [copiedSalesUrlKey, setCopiedSalesUrlKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (autoUnlock) setUnlocked(true);
@@ -336,7 +340,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
 
   const missingPaymentAlerts = useMemo(() => {
     const warnings: string[] = [];
-    (['gh', 'ke', 'ng'] as CountryCode[]).forEach((code) => {
+    ACTIVE_COUNTRIES.forEach((code) => {
       const cfg = COUNTRIES[code];
       const resolved = resolveCountrySettings(code, localSettings);
       const checkUrl = (route: RouteTarget, url: string, label: string) => {
@@ -776,7 +780,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
       groupLabel: 'Infrastructure',
       items: [
         { id: 'firebase', label: 'Firebase 5GB', icon: Cloud },
-        { id: 'countries', label: 'Markets (GH/KE/NG)', icon: Globe },
+        { id: 'countries', label: 'Markets (GH & KE)', icon: Globe },
       ],
     },
   ];
@@ -972,7 +976,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                   <p className="font-serif text-3xl text-[#FBF3EA] mt-1 font-mono tabular-nums">
                     {orders.length}
                   </p>
-                  <p className="text-xs text-[#E2B96F]/85 mt-1">Ghana · Kenya · Nigeria</p>
+                  <p className="text-xs text-[#E2B96F]/85 mt-1">Ghana · Kenya</p>
                 </button>
 
                 <button
@@ -1040,7 +1044,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                 <div className="flex flex-wrap items-center gap-2">
                   {/* Country Segmented Control */}
                   <div className="flex items-center bg-[#120408] p-1 rounded-xl border border-[#E2B96F]/15">
-                    {(['all', 'gh', 'ke', 'ng'] as const).map((code) => (
+                    {(['all', ...ACTIVE_COUNTRIES] as const).map((code) => (
                       <button
                         key={code}
                         type="button"
@@ -1926,7 +1930,6 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                   >
                     <option value="gh">Ghana</option>
                     <option value="ke">Kenya</option>
-                    <option value="ng">Nigeria</option>
                   </select>
                   <select
                     value={newTestimonial.product}
@@ -2278,8 +2281,112 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                {(['gh', 'ke', 'ng'] as CountryCode[]).map((code) => {
+              {/* Direct Entry Sales Page Links (Ghana & Kenya — Keeps public sales pages uncluttered) */}
+              <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#FBF3EA]/10 pb-3.5">
+                  <div>
+                    <h2 className="font-serif text-xl text-[#FBF3EA]">
+                      Direct Sales Page Links (Ghana &amp; Kenya)
+                    </h2>
+                    <p className="text-xs text-[#FBF3EA]/65 mt-0.5">
+                      Use these direct URLs in ads and bio links so visitors land straight on the right campaign and currency with zero page-switcher clutter.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[
+                    {
+                      key: 'reconcile-gh',
+                      campaignLabel: 'Win Her Back · "Are you about to lose her?"',
+                      countryLabel: '🇬🇭 Ghana (GH₵)',
+                      path: '/?view=order&campaign=reconcile&country=gh',
+                    },
+                    {
+                      key: 'reconcile-ke',
+                      campaignLabel: 'Win Her Back · "Are you about to lose her?"',
+                      countryLabel: '🇰🇪 Kenya (KSh)',
+                      path: '/?view=order&campaign=reconcile&country=ke',
+                    },
+                    {
+                      key: 'birthday-gh',
+                      campaignLabel: 'Birthday Gift · "A gift they\'ll never forget"',
+                      countryLabel: '🇬🇭 Ghana (GH₵)',
+                      path: '/?view=order&campaign=birthday&country=gh',
+                    },
+                    {
+                      key: 'birthday-ke',
+                      campaignLabel: 'Birthday Gift · "A gift they\'ll never forget"',
+                      countryLabel: '🇰🇪 Kenya (KSh)',
+                      path: '/?view=order&campaign=birthday&country=ke',
+                    },
+                  ].map((entry) => {
+                    const fullUrl =
+                      typeof window !== 'undefined'
+                        ? `${window.location.origin}${entry.path}`
+                        : entry.path;
+                    const isCopied = copiedSalesUrlKey === entry.key;
+
+                    return (
+                      <div
+                        key={entry.key}
+                        className="rounded-xl bg-[#120408] border border-[#E2B96F]/15 p-3.5 flex flex-col justify-between gap-3"
+                      >
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="font-semibold text-[#FBF3EA] truncate">
+                              {entry.campaignLabel}
+                            </span>
+                            <span className="font-mono text-[#E2B96F] shrink-0">
+                              {entry.countryLabel}
+                            </span>
+                          </div>
+                          <p className="font-mono text-[11px] text-[#FBF3EA]/55 truncate">
+                            {entry.path}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard?.writeText(fullUrl).catch(() => {});
+                              setCopiedSalesUrlKey(entry.key);
+                              setTimeout(() => setCopiedSalesUrlKey(null), 2000);
+                            }}
+                            className="flex-1 min-h-[34px] px-3 rounded-lg bg-[#1A060C] hover:bg-[#240912] border border-[#E2B96F]/25 text-xs font-medium text-[#FBF3EA] flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            {isCopied ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 text-emerald-300" />
+                                <span className="text-emerald-300">Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5 text-[#E2B96F]" />
+                                <span>Copy Link</span>
+                              </>
+                            )}
+                          </button>
+
+                          <a
+                            href={entry.path}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="min-h-[34px] px-3.5 rounded-lg bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] text-xs font-semibold flex items-center gap-1.5 shrink-0"
+                          >
+                            <span>Open</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                {ACTIVE_COUNTRIES.map((code) => {
                   const country = COUNTRIES[code];
                   const pre = country.settingsPrefix;
                   const resolved = resolveCountrySettings(code, localSettings);

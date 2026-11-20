@@ -526,7 +526,7 @@ export const AdminCreateOrderModal: React.FC<AdminCreateOrderModalProps> = ({
   const [partnerName, setPartnerName] = useState('');
   const [email, setEmail] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
-  const [country, setCountry] = useState<CountryCode>('ng');
+  const [country, setCountry] = useState<CountryCode>('gh');
   const [product, setProduct] = useState<ProductType>('chasing-her');
   const [status, setStatus] = useState<'paid' | 'pending_payment'>('paid');
   const [error, setError] = useState('');
@@ -651,7 +651,7 @@ export const AdminCreateOrderModal: React.FC<AdminCreateOrderModalProps> = ({
                 type="tel"
                 value={whatsapp}
                 onChange={(e) => setWhatsapp(e.target.value)}
-                placeholder="+2348012345678"
+                placeholder="+233241234567"
                 className="mt-1.5 w-full min-h-[42px] px-3.5 rounded-xl bg-[#120408] border border-[#E2B96F]/25 text-sm font-mono text-[#FBF3EA] focus:outline-none focus:border-[#E2B96F]"
               />
             </label>
@@ -667,7 +667,6 @@ export const AdminCreateOrderModal: React.FC<AdminCreateOrderModalProps> = ({
               >
                 <option value="gh">Ghana (GH₵)</option>
                 <option value="ke">Kenya (KSh)</option>
-                <option value="ng">Nigeria (₦)</option>
               </select>
             </label>
 

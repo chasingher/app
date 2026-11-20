@@ -86,6 +86,48 @@ export const COUNTRIES: Record<CountryCode, CountryConfig> = {
   },
 };
 
+export type ActiveCountryCode = 'gh' | 'ke';
+
+export const ACTIVE_COUNTRIES: readonly ActiveCountryCode[] = ['gh', 'ke'] as const;
+
+export function normalizeActiveCountry(raw?: string | null): ActiveCountryCode {
+  const value = (raw || '').trim().toLowerCase();
+  if (value === 'ke' || value === 'kenya') return 'ke';
+  return 'gh';
+}
+
+export function resolveCountryFromLocation(search: string, pathname: string): ActiveCountryCode {
+  const params = new URLSearchParams(search);
+  const queryCountry = params.get('country');
+  if (queryCountry) {
+    return normalizeActiveCountry(queryCountry);
+  }
+  const lowerPath = (pathname || '').toLowerCase();
+  if (/(^|\/)(ke|kenya)(\/|$)/.test(lowerPath)) {
+    return 'ke';
+  }
+  return 'gh';
+}
+
+export function resolveSalesCampaignFromLocation(
+  search: string,
+  pathname: string
+): 'reconcile' | 'birthday' {
+  const params = new URLSearchParams(search);
+  const queryCampaign = (params.get('campaign') || params.get('page') || '').trim().toLowerCase();
+  if (queryCampaign === 'birthday' || queryCampaign === 'gift' || queryCampaign === '1') {
+    return 'birthday';
+  }
+  if (queryCampaign === 'reconcile' || queryCampaign === 'win-her-back' || queryCampaign === '2') {
+    return 'reconcile';
+  }
+  const lowerPath = (pathname || '').toLowerCase();
+  if (lowerPath.includes('birthday') || lowerPath.includes('gift')) {
+    return 'birthday';
+  }
+  return 'reconcile';
+}
+
 const EMAIL_TYPO_MAP: Record<string, string> = {
   'gmial.com': 'gmail.com',
   'gamil.com': 'gmail.com',

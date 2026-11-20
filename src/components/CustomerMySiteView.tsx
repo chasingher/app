@@ -223,7 +223,7 @@ export const CustomerMySiteView: React.FC<CustomerMySiteViewProps> = ({
           {[
             { email: 'kofi@example.com', label: '🇬🇭 Kofi (Hosted)' },
             { email: 'brian@example.com', label: '🇰🇪 Brian (Building)' },
-            { email: 'amara@example.com', label: '🇳🇬 Tunde & Amara (Review)' },
+            { email: 'kwesi@example.com', label: '🇬🇭 Kwesi & Abena (Review)' },
           ].map((acc) => (
             <button
               key={acc.email}

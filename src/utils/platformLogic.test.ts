@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   COUNTRIES,
+  ACTIVE_COUNTRIES,
+  normalizeActiveCountry,
+  resolveCountryFromLocation,
+  resolveSalesCampaignFromLocation,
   validateCustomerEmail,
   validateWhatsAppPhone,
   resolveCountrySettings,
@@ -29,6 +33,20 @@ test('Multi-country definitions include Ghana, Kenya, and Nigeria with distinct 
   assert.equal(COUNTRIES.ke.settingsPrefix, 'ke_');
   assert.equal(COUNTRIES.ng.currencySymbol, '₦');
   assert.equal(COUNTRIES.ng.settingsPrefix, 'ng_');
+});
+
+test('Active storefront markets focus exclusively on Ghana and Kenya with direct campaign routing', () => {
+  assert.deepEqual(ACTIVE_COUNTRIES, ['gh', 'ke']);
+  assert.equal(normalizeActiveCountry('ke'), 'ke');
+  assert.equal(normalizeActiveCountry('gh'), 'gh');
+  assert.equal(normalizeActiveCountry('ng'), 'gh');
+  assert.equal(resolveCountryFromLocation('?country=ke', '/'), 'ke');
+  assert.equal(resolveCountryFromLocation('', '/ke/birthday'), 'ke');
+  assert.equal(resolveCountryFromLocation('', '/gh/win-her-back'), 'gh');
+  assert.equal(resolveSalesCampaignFromLocation('?campaign=birthday', '/'), 'birthday');
+  assert.equal(resolveSalesCampaignFromLocation('', '/birthday'), 'birthday');
+  assert.equal(resolveSalesCampaignFromLocation('?campaign=reconcile', '/'), 'reconcile');
+  assert.equal(resolveSalesCampaignFromLocation('', '/win-her-back'), 'reconcile');
 });
 
 test('WhatsApp phone validation normalizes Ghana, Kenya, and Nigeria local numbers to E.164', () => {
