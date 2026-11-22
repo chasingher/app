@@ -56,6 +56,9 @@ import {
   formatStorageMegabytes,
   RouteTarget,
   ProductType,
+  SiteExperienceShowcaseMap,
+  SiteExperienceKey,
+  DEFAULT_SITE_EXPERIENCES,
 } from '../utils/platformLogic';
 import {
   SubmissionOrder,
@@ -63,6 +66,7 @@ import {
   uploadMediaToFirebase,
   ROMANTIC_GALLERY,
   DEFAULT_FLOWER_POOL,
+  LOCKED_FLOWER_WALL_ITEMS,
 } from '../utils/supabaseAndOci';
 import {
   FIREBASE_PROJECT_ID,
@@ -76,6 +80,7 @@ import { PWAInstallButton } from './PWAInstallPrompt';
 import { SiteBuilderStudio } from './SiteBuilderStudio';
 import { RecipientSitePreview } from './RecipientSitePreview';
 import { AdminOrderInspector, AdminCreateOrderModal } from './AdminOrderInspector';
+import { AdminExperienceShowcaseEditor } from './AdminExperienceShowcaseEditor';
 
 interface FirebaseMediaObject {
   id: string;
@@ -127,6 +132,8 @@ interface UnifiedAdminBackstageViewProps {
   onUpdateMusicLibrary: (tracks: MusicLibraryTrack[]) => void;
   showcaseMedia: ShowcaseMediaMap;
   onUpdateShowcaseMedia: (media: ShowcaseMediaMap) => void;
+  siteExperiences?: SiteExperienceShowcaseMap;
+  onUpdateSiteExperiences?: (next: SiteExperienceShowcaseMap) => Promise<void> | void;
   testimonials: TestimonialItem[];
   onUpdateTestimonials: (items: TestimonialItem[]) => void;
   onNavigateView?: (target: {
@@ -141,6 +148,7 @@ type AdminTab =
   | 'orders'
   | 'sales-pages'
   | 'studio'
+  | 'experiences'
   | 'assets'
   | 'testimonials'
   | 'firebase'
@@ -166,9 +174,13 @@ const TAB_TITLES: Record<AdminTab, { title: string; subtitle: string }> = {
     title: 'Site Builder Studio',
     subtitle: 'Create, duplicate, and customize Chasing Her & Memories websites in real time.',
   },
+  experiences: {
+    title: 'Site Experiences & Example Features',
+    subtitle: 'Edit the example feature lists, showcase descriptions, and live demo copy for Chasing Her and Memories.',
+  },
   assets: {
     title: 'Assets & Music Library',
-    subtitle: 'Manage the shared flower curtain pool, romantic soundtracks, and landing showcase previews.',
+    subtitle: 'View the locked 5-blossom signature flower wall and manage shared builder soundtracks.',
   },
   testimonials: {
     title: 'Testimonials & Proof',
@@ -202,6 +214,8 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   onUpdateMusicLibrary,
   showcaseMedia,
   onUpdateShowcaseMedia,
+  siteExperiences = DEFAULT_SITE_EXPERIENCES,
+  onUpdateSiteExperiences,
   testimonials,
   onUpdateTestimonials,
   onNavigateView,
@@ -799,7 +813,8 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
     {
       groupLabel: 'Brand & Media',
       items: [
-        { id: 'assets', label: 'Assets & Music', icon: Sparkles },
+        { id: 'experiences', label: 'Site Experiences', icon: Sparkles },
+        { id: 'assets', label: 'Assets & Music', icon: Music },
         { id: 'testimonials', label: 'Testimonials', icon: Star, count: testimonials.length },
       ],
     },
@@ -1651,6 +1666,47 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
           )}
 
           {/* ================================================================
+              TAB 2.5: SITE EXPERIENCES & EXAMPLE FEATURES EDITOR
+              ================================================================ */}
+          {activeTab === 'experiences' && (
+            <AdminExperienceShowcaseEditor
+              siteExperiences={siteExperiences}
+              onSaveSiteExperiences={async (next) => {
+                await onUpdateSiteExperiences?.(next);
+              }}
+              onUploadExperienceMedia={async (key: SiteExperienceKey, file: File) => {
+                try {
+                  const isVid = file.type.startsWith('video/');
+                  const uploaded = await uploadMediaToFirebase({
+                    file,
+                    kind: isVid ? 'video' : 'images',
+                    projectSlug: `experience-${key}`,
+                  });
+                  await loadFirebaseState();
+                  return {
+                    url: uploaded.url,
+                    mediaType: isVid ? 'video' : 'image',
+                  };
+                } catch {
+                  return null;
+                }
+              }}
+              onOpenSampleInStudio={(key: SiteExperienceKey) => {
+                const sampleSlug =
+                  key === 'chasing-her' ? 'ama-and-kofi' : 'wanjiku-and-brian';
+                setStudioProduct(key);
+                setActiveSlug(sampleSlug);
+                setActiveTab('studio');
+              }}
+              onPreviewSample={(key: SiteExperienceKey) => {
+                const sampleSlug =
+                  key === 'chasing-her' ? 'ama-and-kofi' : 'wanjiku-and-brian';
+                setPreviewOrderModal({ product: key, slug: sampleSlug });
+              }}
+            />
+          )}
+
+          {/* ================================================================
               TAB 3: GLOBAL ASSETS & MUSIC
               ================================================================ */}
           {activeTab === 'assets' && (
@@ -1661,57 +1717,44 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                 </div>
               )}
 
-              {/* 3A: Global Opening Flower Curtain Pool */}
-              <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 p-5 sm:p-6 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* 3A: Locked 5-Blossom Signature Flower Wall */}
+              <div
+                data-testid="admin-locked-flower-wall"
+                className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 p-5 sm:p-6 space-y-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-xs text-[#E2B96F] font-medium">Shared Across Both Editions</p>
+                    <p className="text-xs text-[#E2B96F] font-medium">
+                      Exclusive Brand Signature · Locked Across All Sites
+                    </p>
                     <h2 className="font-serif text-2xl text-[#FBF3EA] mt-0.5">
-                      Global Flower Curtain Pool ({globalFlowerPool.length})
+                      Signature 5-Blossom Flower Wall
                     </h2>
                     <p className="text-xs text-[#FBF3EA]/65 mt-1">
-                      Roses uploaded here are available in the Flower Curtain Picker for both Chasing Her and Memories Builders.
+                      Only these 5 botanical blossoms are used for the opening flower curtain across Chasing Her, Memories, previews, and standalone exports. Customers cannot change or upload flowers.
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onUpdateFlowerPool(DEFAULT_FLOWER_POOL)}
-                      className="min-h-[40px] px-3.5 rounded-xl border border-[#FBF3EA]/20 text-xs text-[#FBF3EA]/80 hover:text-white cursor-pointer"
-                    >
-                      Reset Defaults
-                    </button>
-                    <label className="min-h-[42px] px-4 rounded-xl bg-[#E2B96F] text-[#16050A] font-semibold text-xs flex items-center gap-2 cursor-pointer">
-                      <Upload className="w-4 h-4" />
-                      <span>Add Flower PNG</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleUploadAssetToFirebase(e, 'flower')}
-                        className="hidden"
-                      />
-                    </label>
+                  <div className="inline-flex items-center gap-1.5 min-h-[34px] px-3 rounded-lg bg-[#120408] border border-[#E2B96F]/30 text-xs font-semibold text-[#E2B96F] whitespace-nowrap">
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Fixed · 5 Blossoms</span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-8 gap-3">
-                  {globalFlowerPool.map((flowerUrl, idx) => (
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                  {LOCKED_FLOWER_WALL_ITEMS.map((flower) => (
                     <div
-                      key={idx}
-                      className="relative group rounded-xl bg-[#120408] border border-[#E2B96F]/20 p-3 aspect-square flex items-center justify-center"
+                      key={flower.id}
+                      className="rounded-xl bg-[#120408] border border-[#E2B96F]/20 p-3 flex flex-col items-center gap-2 text-center"
                     >
-                      <img src={flowerUrl} alt={`Flower ${idx + 1}`} className="w-full h-full object-contain" />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onUpdateFlowerPool(globalFlowerPool.filter((_, i) => i !== idx))
-                        }
-                        aria-label={`Remove flower ${idx + 1}`}
-                        className="absolute top-1.5 right-1.5 h-7 w-7 rounded-full bg-rose-950/90 border border-rose-500/40 text-rose-200 flex items-center justify-center cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="w-20 h-20 flex items-center justify-center">
+                        <img
+                          src={flower.url}
+                          alt={flower.name}
+                          className="w-full h-full object-contain drop-shadow-md"
+                        />
+                      </div>
+                      <span className="text-xs font-medium text-[#FBF3EA]/90">{flower.name}</span>
                     </div>
                   ))}
                 </div>
@@ -1837,73 +1880,26 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                 </div>
               </div>
 
-              {/* 3C: Landing Showcase Card Previews */}
-              <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 p-5 sm:p-6 space-y-4">
+              {/* 3C: Site Experiences & Example Features Shortcut */}
+              <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <p className="text-xs text-[#E2B96F] font-medium">Order Landing Cards</p>
+                  <p className="text-xs text-[#E2B96F] font-medium">Sales Page Experience Showcases</p>
                   <h2 className="font-serif text-2xl text-[#FBF3EA] mt-0.5">
-                    Landing Page Showcase Previews
+                    Edit Example Features &amp; Preview Media
                   </h2>
+                  <p className="text-xs text-[#FBF3EA]/65 mt-1">
+                    Customize the feature checklists, descriptions, spotlight copy, and card media for Chasing Her and Memories in the dedicated Site Experiences editor.
+                  </p>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {(
-                    [
-                      { key: 'chasing-her', label: '01. Chasing Her Showcase Media', uploadKey: 'showcase-ch' },
-                      { key: 'memories', label: '02. Memories Showcase Media', uploadKey: 'showcase-mem' },
-                    ] as const
-                  ).map((item) => {
-                    const media = showcaseMedia[item.key];
-                    return (
-                      <div
-                        key={item.key}
-                        className="rounded-xl bg-[#120408] border border-[#E2B96F]/15 p-4 space-y-3"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <h3 className="text-sm font-semibold text-[#FBF3EA]">{item.label}</h3>
-                          <label className="min-h-[36px] px-3 rounded-lg bg-[#E2B96F] text-[#16050A] text-xs font-semibold flex items-center gap-1.5 cursor-pointer">
-                            <Upload className="w-3.5 h-3.5" />
-                            <span>Upload Media</span>
-                            <input
-                              type="file"
-                              accept="image/*,video/*"
-                              onChange={(e) => handleUploadAssetToFirebase(e, item.uploadKey)}
-                              className="hidden"
-                            />
-                          </label>
-                        </div>
-
-                        <div className="rounded-lg overflow-hidden bg-black aspect-[16/9] border border-white/10">
-                          {media.media_type === 'video' ? (
-                            <video src={media.media_url} controls className="w-full h-full object-cover" />
-                          ) : (
-                            <img
-                              src={media.media_url}
-                              alt={item.label}
-                              className="w-full h-full object-cover"
-                            />
-                          )}
-                        </div>
-
-                        <input
-                          type="text"
-                          value={media.media_url}
-                          onChange={(e) =>
-                            onUpdateShowcaseMedia({
-                              ...showcaseMedia,
-                              [item.key]: {
-                                ...media,
-                                media_url: e.target.value,
-                              },
-                            })
-                          }
-                          placeholder="Media URL..."
-                          className="w-full min-h-[38px] px-3 rounded-lg bg-[#1A060C] border border-[#E2B96F]/20 text-xs font-mono text-[#FBF3EA]"
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('experiences')}
+                  className="min-h-[42px] px-4 rounded-xl bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] font-semibold text-xs inline-flex items-center gap-2 cursor-pointer whitespace-nowrap"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Open Site Experiences Editor</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
           )}
@@ -2756,17 +2752,18 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
         </div>
       )}
 
-      {/* Mobile Bottom Thumb-Zone Navigation (Compact, fits 390px cleanly) */}
+      {/* Mobile Bottom Thumb-Zone Navigation (Scrollable so all 8 sections fit cleanly on 390px) */}
       <nav
         aria-label="Admin Backstage mobile navigation"
-        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-[#16050A]/96 backdrop-blur-md border-t border-[#E2B96F]/20 px-1 py-1.5 grid grid-cols-7 gap-0.5"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-[#16050A]/96 backdrop-blur-md border-t border-[#E2B96F]/20 px-2 py-1.5 flex items-center gap-1 overflow-x-auto"
       >
         {(
           [
             { id: 'orders' as AdminTab, label: 'Orders', icon: Package },
             { id: 'sales-pages' as AdminTab, label: 'Pages', icon: Store },
             { id: 'studio' as AdminTab, label: 'Studio', icon: Wand2 },
-            { id: 'assets' as AdminTab, label: 'Assets', icon: Sparkles },
+            { id: 'experiences' as AdminTab, label: 'Features', icon: Sparkles },
+            { id: 'assets' as AdminTab, label: 'Music', icon: Music },
             { id: 'testimonials' as AdminTab, label: 'Reviews', icon: Star },
             { id: 'firebase' as AdminTab, label: 'Cloud', icon: Cloud },
             { id: 'countries' as AdminTab, label: 'Markets', icon: Globe },
@@ -2779,12 +2776,12 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
               key={item.id}
               type="button"
               onClick={() => setActiveTab(item.id)}
-              className={`min-h-[46px] rounded-xl flex flex-col items-center justify-center gap-0.5 text-[10px] font-semibold transition-colors cursor-pointer ${
+              className={`min-h-[46px] min-w-[54px] shrink-0 px-2 rounded-xl flex flex-col items-center justify-center gap-0.5 text-[10px] font-semibold transition-colors cursor-pointer ${
                 active ? 'bg-[#E2B96F]/20 text-[#E2B96F]' : 'text-[#FBF3EA]/65'
               }`}
             >
               <Icon className="w-4 h-4" />
-              <span>{item.label}</span>
+              <span className="whitespace-nowrap">{item.label}</span>
             </button>
           );
         })}

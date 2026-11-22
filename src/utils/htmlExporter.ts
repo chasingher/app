@@ -1,4 +1,19 @@
-import { ChasingHerProjectData, MemoriesProjectData } from './platformLogic';
+import {
+  ChasingHerProjectData,
+  MemoriesProjectData,
+  getLockedFlowerWallUrls,
+} from './platformLogic';
+
+function resolveExportFlowerUrls(orderPageUrl = ''): string[] {
+  const basePath =
+    (typeof import.meta !== 'undefined' &&
+      (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL) ||
+    '/';
+  const relUrls = getLockedFlowerWallUrls(basePath);
+  const trimmedOrigin = orderPageUrl.trim().replace(/\/+$/, '');
+  if (!trimmedOrigin) return relUrls;
+  return relUrls.map((u) => (u.startsWith('http') ? u : `${trimmedOrigin}${u}`));
+}
 
 function safeJsonForScript(data: unknown): string {
   return JSON.stringify(data, null, 2).replace(/<\/script/gi, '<\\/script');
@@ -136,7 +151,7 @@ export function buildChasingHerStandaloneHtml(
     letter_body: project.letter_body || '',
     final_message: project.final_message || 'Forever yours',
     photos: project.photos || [],
-    flower_images: project.flower_images || [],
+    flower_images: resolveExportFlowerUrls(orderPageUrl),
     songs: project.songs || [],
     music_url: project.music_url || '',
     music_start: project.music_start || 0,
@@ -579,7 +594,7 @@ export function buildMemoriesStandaloneHtml(
     letter_body: project.letter_body || '',
     final_message: project.final_message || 'Forever yours',
     memories: project.memories || [],
-    flower_images: project.flower_images || [],
+    flower_images: resolveExportFlowerUrls(orderPageUrl),
     music_url: project.music_url || '',
     music_start: project.music_start || 0,
     music_end: project.music_end ?? null,

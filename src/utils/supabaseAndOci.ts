@@ -4,6 +4,8 @@ import {
   OrderProgressStage,
   ChasingHerProjectData,
   MemoriesProjectData,
+  LOCKED_FLOWER_WALL_ASSETS,
+  resolvePublicAssetUrl,
 } from './platformLogic';
 
 // Romantic SVG artwork data URIs so every template, polaroid, and heart mosaic renders instantaneously with zero external broken images
@@ -41,24 +43,20 @@ export const ROMANTIC_GALLERY = [
   createRomanticIllustration('Our Favorite Song', 'MIDNIGHT CONFESSIONS', '#521527', '#1B050B', '#DFB46B'),
 ];
 
-function createFlowerSvg(petalColor: string, centerColor: string, petals = 10): string {
-  const ellipses = Array.from({ length: petals })
-    .map(
-      (_, i) =>
-        `<ellipse cx="50" cy="24" rx="${petals > 7 ? 11 : 15}" ry="${petals > 7 ? 21 : 23}" fill="${petalColor}" opacity="0.92" transform="rotate(${i * (360 / petals)} 50 50)" />`
-    )
-    .join('');
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${ellipses}<circle cx="50" cy="50" r="10" fill="${centerColor}" /></svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
+const RUNTIME_BASE_URL =
+  typeof import.meta !== 'undefined' &&
+  (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL
+    ? (import.meta as { env?: { BASE_URL?: string } }).env!.BASE_URL!
+    : '/';
 
-export const DEFAULT_FLOWER_POOL: string[] = [
-  createFlowerSvg('#E8879F', '#FBDFE8', 10),
-  createFlowerSvg('#C2185B', '#F0C988', 8),
-  createFlowerSvg('#E8C27A', '#5A1A2C', 10),
-  createFlowerSvg('#F7D3DE', '#96123F', 6),
-  createFlowerSvg('#A33A5B', '#FAF1E2', 8),
-];
+export const LOCKED_FLOWER_WALL_ITEMS = LOCKED_FLOWER_WALL_ASSETS.map((asset) => ({
+  id: asset.id,
+  name: asset.name,
+  url: resolvePublicAssetUrl(asset.relativePath, RUNTIME_BASE_URL),
+}));
+
+// Exclusive 5-blossom botanical flower wall used across every site (customers cannot alter this pool)
+export const DEFAULT_FLOWER_POOL: string[] = LOCKED_FLOWER_WALL_ITEMS.map((item) => item.url);
 
 export const INITIAL_MUSIC_LIBRARY = [
   {

@@ -24,6 +24,11 @@ import {
   computeProjectStorageUsage,
   canAddFileToBuild,
   commitProjectSavedMedia,
+  LOCKED_FLOWER_WALL_ASSETS,
+  getLockedFlowerWallUrls,
+  DEFAULT_SITE_EXPERIENCES,
+  mergeSiteExperiences,
+  serializeSiteExperiences,
 } from './platformLogic';
 import {
   buildChasingHerStandaloneHtml,
@@ -287,7 +292,9 @@ test('Standalone HTML exporters inject project snapshots, burgundy-gold PIN scre
   assert.ok(chHtml.includes('#28060e'));
   assert.ok(chHtml.includes('#e2b96f'));
   assert.ok(chHtml.includes('FlowerReveal'));
-  assert.ok(chHtml.includes('https://cdn.example.com/rose.png'));
+  assert.ok(chHtml.includes('ChatGPT_Image_Aug_29__2026__09_17_27_PM_a36feab0.png'));
+  assert.ok(chHtml.includes('ChatGPT_Image_Aug_29__2026__09_23_28_PM_d361cd42.png'));
+  assert.ok(!chHtml.includes('https://cdn.example.com/rose.png'));
   assert.ok(chHtml.includes('bs-music-player'));
   assert.ok(chHtml.includes('"music_start": 12'));
   assert.ok(chHtml.includes('"music_end": 58'));
@@ -331,7 +338,8 @@ test('Standalone HTML exporters inject project snapshots, burgundy-gold PIN scre
   assert.ok(memHtml.includes('#e2b96f'));
   assert.ok(memHtml.includes('CollageScreen'));
   assert.ok(memHtml.includes('FlowerBurst'));
-  assert.ok(memHtml.includes('https://cdn.example.com/peony.png'));
+  assert.ok(memHtml.includes('ChatGPT_Image_Aug_29__2026__09_17_41_PM_f5c85e28.png'));
+  assert.ok(!memHtml.includes('https://cdn.example.com/peony.png'));
   assert.ok(memHtml.includes('https://cdn.example.com/voice.webm'));
   assert.ok(memHtml.includes('fx-blur-focus-enter'));
   assert.ok(memHtml.includes('fx-circular-enter'));
@@ -434,6 +442,60 @@ test('50 MB paid build storage quota tracks staged vs saved audio/media and purg
   const usageAfterCommit = computeProjectStorageUsage(committedProject, 'chasing-her');
   assert.equal(usageAfterCommit.breakdown.stagedBytes, 0);
   assert.equal(usageAfterCommit.breakdown.savedBytes, 22 * MB);
+});
+
+test('Locked 5-blossom flower wall resolves exclusively to the 5 uploaded PNG assets across root and GitHub Pages subpaths', () => {
+  assert.equal(LOCKED_FLOWER_WALL_ASSETS.length, 5);
+  const rootUrls = getLockedFlowerWallUrls('/');
+  assert.equal(rootUrls.length, 5);
+  assert.equal(
+    rootUrls[0],
+    '/assets/aistudio/ChatGPT_Image_Aug_29__2026__09_17_27_PM_a36feab0.png'
+  );
+  assert.equal(
+    rootUrls[4],
+    '/assets/aistudio/ChatGPT_Image_Aug_29__2026__09_23_28_PM_d361cd42.png'
+  );
+
+  const ghPagesUrls = getLockedFlowerWallUrls('/chasing-her/');
+  assert.equal(
+    ghPagesUrls[0],
+    '/chasing-her/assets/aistudio/ChatGPT_Image_Aug_29__2026__09_17_27_PM_a36feab0.png'
+  );
+  assert.equal(
+    ghPagesUrls[2],
+    '/chasing-her/assets/aistudio/ChatGPT_Image_Aug_29__2026__09_25_26_PM_13bdae67.png'
+  );
+});
+
+test('Site experience showcase config safely merges partial admin overrides and preserves defaults', () => {
+  const defaults = mergeSiteExperiences(null);
+  assert.equal(defaults['chasing-her'].title, DEFAULT_SITE_EXPERIENCES['chasing-her'].title);
+  assert.ok(defaults['chasing-her'].exampleFeatures.length >= 3);
+  assert.ok(defaults.memories.exampleFeatures.length >= 3);
+
+  const customMap = mergeSiteExperiences({
+    'chasing-her': {
+      title: 'Chasing Her · Bespoke Story',
+      exampleFeatures: ['Custom handwritten Polaroid timeline', 'Wax-sealed midnight letter'],
+    },
+  });
+  assert.equal(customMap['chasing-her'].title, 'Chasing Her · Bespoke Story');
+  assert.deepEqual(customMap['chasing-her'].exampleFeatures, [
+    'Custom handwritten Polaroid timeline',
+    'Wax-sealed midnight letter',
+  ]);
+  assert.equal(customMap.memories.title, DEFAULT_SITE_EXPERIENCES.memories.title);
+
+  const serialized = serializeSiteExperiences(customMap);
+  const restored = mergeSiteExperiences(serialized);
+  assert.deepEqual(restored['chasing-her'].exampleFeatures, [
+    'Custom handwritten Polaroid timeline',
+    'Wax-sealed midnight letter',
+  ]);
+
+  const malformed = mergeSiteExperiences('{bad-json');
+  assert.equal(malformed.memories.title, DEFAULT_SITE_EXPERIENCES.memories.title);
 });
 
 

@@ -14,11 +14,14 @@ import {
   Volume2,
   Image as ImageIcon,
   ArrowRight,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   ChasingHerProjectData,
   MemoriesProjectData,
   ShowcaseMediaMap,
+  SiteExperienceShowcaseMap,
+  DEFAULT_SITE_EXPERIENCES,
   buildHeartMosaicLayout,
 } from '../utils/platformLogic';
 import { DEFAULT_FLOWER_POOL } from '../utils/supabaseAndOci';
@@ -40,6 +43,7 @@ interface InteractiveProductDemoReelProps {
   chasingHerDemo: ChasingHerProjectData;
   memoriesDemo: MemoriesProjectData;
   showcaseMedia: ShowcaseMediaMap;
+  siteExperiences?: SiteExperienceShowcaseMap;
   campaignMode?: 'reconcile' | 'birthday';
   onSelectProductAndCheckout: (product: 'chasing-her' | 'memories') => void;
   onOpenFullModal: (product: 'chasing-her' | 'memories') => void;
@@ -86,7 +90,7 @@ const DEMO_CAROUSEL_SLIDES: CarouselSlideSpec[] = [
     perspectiveLabel: 'Soundtrack & Spinning Flower Curtain',
     title: 'Your chosen song fades in as a spinning curtain of flowers blooms open',
     subtitle:
-      'The moment the last digit of their PIN clicks in, your custom chorus begins playing and 16 botanical blossoms spin and part across their screen to reveal your opening line.',
+      'The moment the last digit of their PIN clicks in, your custom chorus begins playing and our 5 signature botanical blossoms spin and part across their screen to reveal your opening line.',
     emotionalQuote: '“The moment our song started playing and the flowers parted, she gasped.”',
     durationSec: 5,
   },
@@ -121,6 +125,7 @@ export const InteractiveProductDemoReel: React.FC<InteractiveProductDemoReelProp
   pricePage,
   chasingHerDemo,
   memoriesDemo,
+  siteExperiences = DEFAULT_SITE_EXPERIENCES,
   campaignMode = 'birthday',
   onSelectProductAndCheckout,
   onOpenFullModal,
@@ -140,8 +145,32 @@ export const InteractiveProductDemoReel: React.FC<InteractiveProductDemoReelProp
   const [waxSealCracked, setWaxSealCracked] = useState(false);
   const [mosaicPlacedCount, setMosaicPlacedCount] = useState(34);
 
+  const carouselSlides = useMemo<CarouselSlideSpec[]>(() => {
+    return DEMO_CAROUSEL_SLIDES.map((slide) => {
+      if (slide.id === 'chasing-her-story') {
+        const exp = siteExperiences['chasing-her'];
+        return {
+          ...slide,
+          title: exp.demoSceneTitle || slide.title,
+          subtitle: exp.demoSceneSubtitle || slide.subtitle,
+          emotionalQuote: exp.demoSceneQuote || slide.emotionalQuote,
+        };
+      }
+      if (slide.id === 'memories-mosaic') {
+        const exp = siteExperiences.memories;
+        return {
+          ...slide,
+          title: exp.demoSceneTitle || slide.title,
+          subtitle: exp.demoSceneSubtitle || slide.subtitle,
+          emotionalQuote: exp.demoSceneQuote || slide.emotionalQuote,
+        };
+      }
+      return slide;
+    });
+  }, [siteExperiences]);
+
   const mosaicSlots = useMemo(() => buildHeartMosaicLayout(9, 7), []);
-  const activeSlide = DEMO_CAROUSEL_SLIDES[activeSlideIdx];
+  const activeSlide = carouselSlides[activeSlideIdx] || carouselSlides[0];
   const isMotionActive = isAutoPlaying || (isHoveringStage && !manuallyPaused);
 
   const sanitizedSlug =
@@ -737,7 +766,7 @@ export const InteractiveProductDemoReel: React.FC<InteractiveProductDemoReelProp
                         &ldquo;{customOpeningLine}&rdquo;
                       </h4>
                       <p className="text-xs text-[#F5DAD5]/80">
-                        16 botanical blossoms spin in a layered curtain and part to reveal your photos.
+                        5 signature botanical blossoms spin in a layered curtain and part to reveal your photos.
                       </p>
                     </div>
                   </div>
@@ -937,6 +966,7 @@ export const InteractiveProductDemoReel: React.FC<InteractiveProductDemoReelProp
 interface HoverToPlayEditionCardsProps {
   pricePage: string;
   showcaseMedia: ShowcaseMediaMap;
+  siteExperiences?: SiteExperienceShowcaseMap;
   onPreviewLive: (product: 'chasing-her' | 'memories') => void;
   onChooseEdition: (product: 'chasing-her' | 'memories') => void;
 }
@@ -944,6 +974,7 @@ interface HoverToPlayEditionCardsProps {
 export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = ({
   pricePage,
   showcaseMedia,
+  siteExperiences = DEFAULT_SITE_EXPERIENCES,
   onPreviewLive,
   onChooseEdition,
 }) => {
@@ -952,8 +983,18 @@ export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = (
   const memVideoRef = useRef<HTMLVideoElement | null>(null);
   const mosaicSlots = useMemo(() => buildHeartMosaicLayout(9, 7), []);
 
-  const chMedia = showcaseMedia['chasing-her'];
-  const memMedia = showcaseMedia.memories;
+  const chExp = siteExperiences['chasing-her'];
+  const memExp = siteExperiences.memories;
+
+  const chMediaUrl = chExp.mediaUrl || showcaseMedia['chasing-her']?.media_url || '';
+  const chMediaType = chExp.mediaUrl
+    ? chExp.mediaType || 'image'
+    : showcaseMedia['chasing-her']?.media_type || 'image';
+
+  const memMediaUrl = memExp.mediaUrl || showcaseMedia.memories?.media_url || '';
+  const memMediaType = memExp.mediaUrl
+    ? memExp.mediaType || 'image'
+    : showcaseMedia.memories?.media_type || 'image';
 
   const handleEnterCard = (edition: 'chasing-her' | 'memories') => {
     setHoveredCard(edition);
@@ -976,6 +1017,7 @@ export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* EDITION 01: CHASING HER (HOVER-TO-PLAY POLAROID & WAX SEAL REEL) */}
       <div
+        data-testid="edition-card-chasing-her"
         onMouseEnter={() => handleEnterCard('chasing-her')}
         onMouseLeave={() => handleLeaveCard('chasing-her')}
         className="group bg-[#FFFBF6] rounded-[28px] overflow-hidden border-2 border-[#5A1A2C]/15 hover:border-[#5A1A2C] shadow-md hover:shadow-2xl transition-all duration-300 flex flex-col justify-between"
@@ -983,14 +1025,20 @@ export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = (
         <div>
           {/* Hover-to-Play Cinema Header */}
           <div className="relative h-56 bg-gradient-to-br from-[#2B0813] via-[#421020] to-[#1A040A] overflow-hidden p-4 flex flex-col justify-between">
-            {chMedia?.media_type === 'video' && chMedia.media_url ? (
+            {chMediaType === 'video' && chMediaUrl ? (
               <video
                 ref={chVideoRef}
-                src={chMedia.media_url}
+                src={chMediaUrl}
                 muted
                 loop
                 playsInline
                 className="absolute inset-0 w-full h-full object-cover opacity-85"
+              />
+            ) : chExp.mediaUrl ? (
+              <img
+                src={chExp.mediaUrl}
+                alt={chExp.title}
+                className="absolute inset-0 w-full h-full object-cover opacity-85 transition-transform duration-500 group-hover:scale-105"
               />
             ) : (
               /* Interactive Hover-to-Play Polaroid Conveyor + Wax Envelope */
@@ -1032,20 +1080,34 @@ export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = (
               </span>
             </div>
 
-            <div className="relative z-10 flex items-center justify-between text-[11px] text-[#FBF3EA]/90 bg-black/45 backdrop-blur-xs px-3 py-1.5 rounded-xl border border-white/10">
-              <span>✦ Polaroid Conveyor + 3D Wax Letter + Spotify Songs</span>
-              <span className="text-[#DCC397] font-bold">Edition 01</span>
+            <div className="relative z-10 flex items-center justify-between gap-2 text-[11px] text-[#FBF3EA]/90 bg-black/45 backdrop-blur-xs px-3 py-1.5 rounded-xl border border-white/10">
+              <span className="truncate">✦ {chExp.featureStrip}</span>
+              <span className="text-[#DCC397] font-bold shrink-0">{chExp.editionLabel}</span>
             </div>
           </div>
 
           {/* Card Body */}
-          <div className="p-6 sm:p-7">
-            <h3 className="font-serif text-2xl sm:text-3xl text-[#5A1A2C] mb-1.5">
-              Chasing Her · Scrollable Story
-            </h3>
-            <p className="text-sm text-[#7A5A47] leading-relaxed mb-4">
-              Designed for heartfelt storytelling: opens with your secret PIN and spinning flower curtain, glides across a two-row Polaroid wall, and ends at a 3D wax-sealed love letter.
-            </p>
+          <div className="p-6 sm:p-7 space-y-4">
+            <div>
+              <h3 className="font-serif text-2xl sm:text-3xl text-[#5A1A2C] mb-1.5">
+                {chExp.title}
+              </h3>
+              <p className="text-sm text-[#7A5A47] leading-relaxed">{chExp.description}</p>
+            </div>
+
+            {chExp.exampleFeatures.length > 0 && (
+              <ul className="space-y-2 pt-3 border-t border-[#5A1A2C]/10">
+                {chExp.exampleFeatures.map((feat, idx) => (
+                  <li
+                    key={idx}
+                    className="flex items-start gap-2 text-xs sm:text-[13px] text-[#2B1710] leading-snug"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-[#5A1A2C] shrink-0 mt-0.5" />
+                    <span>{feat}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
 
@@ -1064,7 +1126,7 @@ export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = (
             onClick={() => onChooseEdition('chasing-her')}
             className="py-3 px-4 rounded-full bg-[#5A1A2C] hover:bg-[#33101B] text-[#FBF3EA] font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
-            <span>Choose Chasing Her</span>
+            <span>{chExp.ctaLabel}</span>
             <ArrowRight className="w-3.5 h-3.5 text-[#DCC397]" />
           </button>
         </div>
@@ -1072,6 +1134,7 @@ export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = (
 
       {/* EDITION 02: MEMORIES (HOVER-TO-PLAY 34-PHOTO HEART MOSAIC & VOICE DUET) */}
       <div
+        data-testid="edition-card-memories"
         onMouseEnter={() => handleEnterCard('memories')}
         onMouseLeave={() => handleLeaveCard('memories')}
         className="group bg-[#FFFBF6] rounded-[28px] overflow-hidden border-2 border-[#5A1A2C]/15 hover:border-[#5A1A2C] shadow-md hover:shadow-2xl transition-all duration-300 flex flex-col justify-between"
@@ -1079,14 +1142,20 @@ export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = (
         <div>
           {/* Hover-to-Play Cinema Header */}
           <div className="relative h-56 bg-gradient-to-br from-[#230610] via-[#3B0B1C] to-[#140207] overflow-hidden p-4 flex flex-col justify-between">
-            {memMedia?.media_type === 'video' && memMedia.media_url ? (
+            {memMediaType === 'video' && memMediaUrl ? (
               <video
                 ref={memVideoRef}
-                src={memMedia.media_url}
+                src={memMediaUrl}
                 muted
                 loop
                 playsInline
                 className="absolute inset-0 w-full h-full object-cover opacity-85"
+              />
+            ) : memExp.mediaUrl ? (
+              <img
+                src={memExp.mediaUrl}
+                alt={memExp.title}
+                className="absolute inset-0 w-full h-full object-cover opacity-85 transition-transform duration-500 group-hover:scale-105"
               />
             ) : (
               /* Interactive Hover-to-Play 34-Tile Heart Mosaic */
@@ -1130,20 +1199,34 @@ export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = (
               </span>
             </div>
 
-            <div className="relative z-10 flex items-center justify-between text-[11px] text-[#FBF3EA]/90 bg-black/45 backdrop-blur-xs px-3 py-1.5 rounded-xl border border-white/10">
-              <span>✦ 34-Photo Heart + 9-Effect Slideshow + Voice Note Duet</span>
-              <span className="text-[#DCC397] font-bold">Edition 02</span>
+            <div className="relative z-10 flex items-center justify-between gap-2 text-[11px] text-[#FBF3EA]/90 bg-black/45 backdrop-blur-xs px-3 py-1.5 rounded-xl border border-white/10">
+              <span className="truncate">✦ {memExp.featureStrip}</span>
+              <span className="text-[#DCC397] font-bold shrink-0">{memExp.editionLabel}</span>
             </div>
           </div>
 
           {/* Card Body */}
-          <div className="p-6 sm:p-7">
-            <h3 className="font-serif text-2xl sm:text-3xl text-[#5A1A2C] mb-1.5">
-              Memories · 34-Heart &amp; Voice Duet
-            </h3>
-            <p className="text-sm text-[#7A5A47] leading-relaxed mb-4">
-              Built for couples with lots of photos and videos: assembles 34 moments into a beating heart mosaic, bursts into a full-screen slideshow, and plays your voice note over your song.
-            </p>
+          <div className="p-6 sm:p-7 space-y-4">
+            <div>
+              <h3 className="font-serif text-2xl sm:text-3xl text-[#5A1A2C] mb-1.5">
+                {memExp.title}
+              </h3>
+              <p className="text-sm text-[#7A5A47] leading-relaxed">{memExp.description}</p>
+            </div>
+
+            {memExp.exampleFeatures.length > 0 && (
+              <ul className="space-y-2 pt-3 border-t border-[#5A1A2C]/10">
+                {memExp.exampleFeatures.map((feat, idx) => (
+                  <li
+                    key={idx}
+                    className="flex items-start gap-2 text-xs sm:text-[13px] text-[#2B1710] leading-snug"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-[#5A1A2C] shrink-0 mt-0.5" />
+                    <span>{feat}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
 
@@ -1162,7 +1245,7 @@ export const HoverToPlayEditionCards: React.FC<HoverToPlayEditionCardsProps> = (
             onClick={() => onChooseEdition('memories')}
             className="py-3 px-4 rounded-full bg-[#5A1A2C] hover:bg-[#33101B] text-[#FBF3EA] font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
-            <span>Choose Memories</span>
+            <span>{memExp.ctaLabel}</span>
             <ArrowRight className="w-3.5 h-3.5 text-[#DCC397]" />
           </button>
         </div>

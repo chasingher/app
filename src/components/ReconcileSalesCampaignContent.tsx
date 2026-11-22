@@ -21,7 +21,10 @@ import {
   ChasingHerProjectData,
   MemoriesProjectData,
   ShowcaseMediaMap,
+  SiteExperienceShowcaseMap,
+  DEFAULT_SITE_EXPERIENCES,
 } from '../utils/platformLogic';
+import { LOCKED_FLOWER_WALL_ITEMS } from '../utils/supabaseAndOci';
 import { SALES_PAGE_ASSETS } from '../utils/salesPageAssets';
 import {
   InteractiveProductDemoReel,
@@ -131,6 +134,7 @@ interface ReconcileSalesCampaignContentProps {
   chasingHerDemo: ChasingHerProjectData;
   memoriesDemo: MemoriesProjectData;
   showcaseMedia: ShowcaseMediaMap;
+  siteExperiences?: SiteExperienceShowcaseMap;
   demoSectionRef: React.RefObject<HTMLElement | null>;
   onScrollToDemonstration: () => void;
   onOpenInstantCheckout: (pick?: ProductType) => void;
@@ -145,9 +149,6 @@ export const ReconcileSalesCampaignContent: React.FC<ReconcileSalesCampaignConte
   setPartnerName,
   customPin,
   setCustomPin,
-  selectedFlowerTheme,
-  setSelectedFlowerTheme,
-  flowerThemes,
   customOpeningLine,
   setCustomOpeningLine,
   sanitizedPartnerSlug,
@@ -156,6 +157,7 @@ export const ReconcileSalesCampaignContent: React.FC<ReconcileSalesCampaignConte
   chasingHerDemo,
   memoriesDemo,
   showcaseMedia,
+  siteExperiences = DEFAULT_SITE_EXPERIENCES,
   demoSectionRef,
   onScrollToDemonstration,
   onOpenInstantCheckout,
@@ -650,6 +652,7 @@ export const ReconcileSalesCampaignContent: React.FC<ReconcileSalesCampaignConte
           <HoverToPlayEditionCards
             pricePage={funnel.pricePage}
             showcaseMedia={showcaseMedia}
+            siteExperiences={siteExperiences}
             onPreviewLive={(prod) => onOpenLivePreviewModal(prod)}
             onChooseEdition={(prod) => onLockInAndScrollToForm(prod)}
           />
@@ -757,35 +760,28 @@ export const ReconcileSalesCampaignContent: React.FC<ReconcileSalesCampaignConte
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[#2B1710] mb-1.5">
-                  3. Opening Botanical Bloom
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {flowerThemes.map((theme, idx) => (
-                    <button
-                      key={theme.id}
-                      type="button"
-                      onClick={() => setSelectedFlowerTheme(idx)}
-                      className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
-                        selectedFlowerTheme === idx
-                          ? 'border-[#5A1A2C] bg-[#F5DAD5]/50'
-                          : 'border-[#2B1710]/12 bg-[#FBF3EA] hover:border-[#5A1A2C]/35'
-                      }`}
+              <div data-testid="sales-locked-flower-wall">
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <span className="text-xs font-bold text-[#2B1710]">
+                    3. Signature Opening Flower Wall
+                  </span>
+                  <span className="text-[11px] font-semibold text-[#5A1A2C] flex items-center gap-1">
+                    <Lock className="w-3 h-3 text-[#B98A4E]" />
+                    Included automatically
+                  </span>
+                </div>
+                <div className="grid grid-cols-5 gap-2 p-2.5 rounded-xl bg-[#FBF3EA] border border-[#5A1A2C]/15">
+                  {LOCKED_FLOWER_WALL_ITEMS.map((flower) => (
+                    <div
+                      key={flower.id}
+                      className="flex flex-col items-center justify-center gap-1 text-center"
                     >
-                      <div className="flex items-center gap-1.5 mb-1">
-                        {theme.colors.map((hex) => (
-                          <span
-                            key={hex}
-                            className="w-3.5 h-3.5 rounded-full border border-black/10"
-                            style={{ backgroundColor: hex }}
-                          />
-                        ))}
-                      </div>
-                      <div className="text-[11px] font-bold text-[#2B1710] line-clamp-1">
-                        {theme.name}
-                      </div>
-                    </button>
+                      <img
+                        src={flower.url}
+                        alt={flower.name}
+                        className="w-10 h-10 object-contain drop-shadow-xs"
+                      />
+                    </div>
                   ))}
                 </div>
               </div>
@@ -953,6 +949,7 @@ export const ReconcileSalesCampaignContent: React.FC<ReconcileSalesCampaignConte
             chasingHerDemo={chasingHerDemo}
             memoriesDemo={memoriesDemo}
             showcaseMedia={showcaseMedia}
+            siteExperiences={siteExperiences}
             campaignMode="reconcile"
             onSelectProductAndCheckout={(prod) => onOpenInstantCheckout(prod)}
             onOpenFullModal={(prod) => onOpenLivePreviewModal(prod)}

@@ -40,6 +40,8 @@ import {
   ChasingHerProjectData,
   MemoriesProjectData,
   ShowcaseMediaMap,
+  SiteExperienceShowcaseMap,
+  DEFAULT_SITE_EXPERIENCES,
 } from '../utils/platformLogic';
 import {
   SubmissionOrder,
@@ -67,6 +69,7 @@ interface OrderLandingViewProps {
   settingsMap: Record<string, string>;
   testimonials: TestimonialItem[];
   showcaseMedia?: ShowcaseMediaMap;
+  siteExperiences?: SiteExperienceShowcaseMap;
   chasingHerDemo: ChasingHerProjectData;
   memoriesDemo: MemoriesProjectData;
   onOrderCreated: (newOrder: SubmissionOrder, destination: 'builder' | 'brief' | 'my-site') => void;
@@ -132,6 +135,7 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
   onChangeCountry,
   settingsMap,
   showcaseMedia = INITIAL_SHOWCASE_MEDIA,
+  siteExperiences = DEFAULT_SITE_EXPERIENCES,
   chasingHerDemo,
   memoriesDemo,
   onOrderCreated,
@@ -334,7 +338,7 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
         design: selectedProduct === 'memories' ? 'memories' : 'chasing-her',
         for: partnerName.trim() || 'My Partner',
         feel: customOpeningLine || 'Birthday Surprise',
-        links: FLOWER_THEMES[selectedFlowerTheme]?.name || '',
+        links: 'Signature 5-Blossom Flower Wall',
         notes: occasionNote.trim(),
       },
       created_at: new Date().toISOString(),
@@ -869,6 +873,7 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
           chasingHerDemo={chasingHerDemo}
           memoriesDemo={memoriesDemo}
           showcaseMedia={showcaseMedia}
+          siteExperiences={siteExperiences}
           demoSectionRef={demoSectionRef}
           onScrollToDemonstration={scrollToDemonstration}
           onOpenInstantCheckout={openInstantCheckout}
@@ -894,6 +899,7 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
           chasingHerDemo={chasingHerDemo}
           memoriesDemo={memoriesDemo}
           showcaseMedia={showcaseMedia}
+          siteExperiences={siteExperiences}
           demoSectionRef={demoSectionRef}
           onScrollToDemonstration={scrollToDemonstration}
           onOpenInstantCheckout={openInstantCheckout}

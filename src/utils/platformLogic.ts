@@ -190,6 +190,54 @@ export function normalizeBaseUrl(baseUrl = '/'): string {
   return withLeading.endsWith('/') ? withLeading : `${withLeading}/`;
 }
 
+export function resolvePublicAssetUrl(relativePath: string, baseUrl = '/'): string {
+  const cleanRel = (relativePath || '').replace(/^\/+/, '');
+  if (!cleanRel) return '/';
+  if (/^(https?:|data:|blob:)/i.test(relativePath)) return relativePath;
+  const base = normalizeBaseUrl(baseUrl);
+  return `${base}${cleanRel}`;
+}
+
+export interface LockedFlowerAsset {
+  id: string;
+  name: string;
+  relativePath: string;
+}
+
+export const LOCKED_FLOWER_WALL_ASSETS: readonly LockedFlowerAsset[] = [
+  {
+    id: 'golden-buttercup',
+    name: 'Golden Buttercup',
+    relativePath: 'assets/aistudio/ChatGPT_Image_Aug_29__2026__09_17_27_PM_a36feab0.png',
+  },
+  {
+    id: 'rose-pink-hibiscus',
+    name: 'Rose Pink Hibiscus',
+    relativePath: 'assets/aistudio/ChatGPT_Image_Aug_29__2026__09_17_41_PM_f5c85e28.png',
+  },
+  {
+    id: 'champagne-ivory-peony',
+    name: 'Champagne Ivory Peony',
+    relativePath: 'assets/aistudio/ChatGPT_Image_Aug_29__2026__09_25_26_PM_13bdae67.png',
+  },
+  {
+    id: 'sage-botanical',
+    name: 'Sage Botanical Blossom',
+    relativePath: 'assets/aistudio/ChatGPT_Image_Aug_29__2026__09_17_34_PM_cbefb3c8.png',
+  },
+  {
+    id: 'royal-cobalt-hibiscus',
+    name: 'Royal Cobalt Hibiscus',
+    relativePath: 'assets/aistudio/ChatGPT_Image_Aug_29__2026__09_23_28_PM_d361cd42.png',
+  },
+] as const;
+
+export function getLockedFlowerWallUrls(baseUrl = '/'): string[] {
+  return LOCKED_FLOWER_WALL_ASSETS.map((item) =>
+    resolvePublicAssetUrl(item.relativePath, baseUrl)
+  );
+}
+
 export function stripBasePath(pathname: string, baseUrl = '/'): string {
   const cleanPath = pathname || '/';
   const base = normalizeBaseUrl(baseUrl);
@@ -656,6 +704,152 @@ export interface ShowcaseMediaItem {
 
 export type ShowcaseMediaMap = Record<'chasing-her' | 'memories', ShowcaseMediaItem>;
 
+export type SiteExperienceKey = 'chasing-her' | 'memories';
+
+export interface SiteExperienceConfig {
+  key: SiteExperienceKey;
+  editionLabel: string;
+  title: string;
+  featureStrip: string;
+  description: string;
+  exampleFeatures: string[];
+  demoSceneTitle: string;
+  demoSceneSubtitle: string;
+  demoSceneQuote: string;
+  ctaLabel: string;
+  mediaUrl: string;
+  mediaType: 'image' | 'video';
+}
+
+export type SiteExperienceShowcaseMap = Record<SiteExperienceKey, SiteExperienceConfig>;
+
+export const SITE_EXPERIENCES_SETTING_KEY = 'site_experiences_json';
+
+export const DEFAULT_SITE_EXPERIENCES: SiteExperienceShowcaseMap = {
+  'chasing-her': {
+    key: 'chasing-her',
+    editionLabel: 'Edition 01',
+    title: 'Chasing Her · Scrollable Story',
+    featureStrip: 'Polaroid Conveyor + 3D Wax Letter + Spotify Songs',
+    description:
+      'Designed for heartfelt storytelling: opens with your secret PIN and signature 5-blossom flower curtain, glides across a two-row Polaroid wall, and ends at a 3D wax-sealed love letter.',
+    exampleFeatures: [
+      'Secret 6-digit PIN vault + signature 5-blossom flower curtain',
+      'Two drifting rows of Polaroid memories with handwritten captions',
+      'Interactive 3D crimson wax-sealed typewriter love letter',
+      'Custom soundtrack chorus or Spotify song playlist',
+    ],
+    demoSceneTitle: 'Two drifting rows of Polaroid memories lead to a crimson wax-sealed letter',
+    demoSceneSubtitle:
+      'Your photos drift past like vintage Polaroids with handwritten captions underneath, followed by an interactive 3D envelope they tap to reveal your typewriter love letter.',
+    demoSceneQuote: '“She tapped the crimson wax seal and started crying before line three.”',
+    ctaLabel: 'Choose Chasing Her',
+    mediaUrl: '',
+    mediaType: 'image',
+  },
+  memories: {
+    key: 'memories',
+    editionLabel: 'Edition 02',
+    title: 'Memories · 34-Heart & Voice Duet',
+    featureStrip: '34-Photo Heart + 9-Effect Slideshow + Voice Note Duet',
+    description:
+      'Built for couples with lots of photos and videos: assembles 34 moments into a beating heart mosaic, bursts into a full-screen slideshow, and plays your voice note over your song.',
+    exampleFeatures: [
+      '34 photos assemble tile-by-tile into a beating heart mosaic',
+      'Full-screen cinematic slideshow with 9 romantic transitions',
+      'Record your own voice note that plays gently over your song',
+      'Private PIN vault + signature 5-blossom flower curtain reveal',
+    ],
+    demoSceneTitle: '34 of your photos fly into a beating heart mosaic with your voice reading to them',
+    demoSceneSubtitle:
+      'Watch 34 photos assemble tile-by-tile from the center outward into a beating heart, then burst into a 9-transition slideshow while your background music softens under your voice note.',
+    demoSceneQuote: '“Hearing my voice reading the letter over our 34 photos broke her in the best way.”',
+    ctaLabel: 'Choose Memories',
+    mediaUrl: '',
+    mediaType: 'image',
+  },
+};
+
+export function mergeSiteExperiences(
+  rawInput?: string | Partial<Record<SiteExperienceKey, Partial<SiteExperienceConfig>>> | null,
+  fallback: SiteExperienceShowcaseMap = DEFAULT_SITE_EXPERIENCES
+): SiteExperienceShowcaseMap {
+  let parsed: Partial<Record<SiteExperienceKey, Partial<SiteExperienceConfig>>> | null = null;
+  if (typeof rawInput === 'string' && rawInput.trim()) {
+    try {
+      const json = JSON.parse(rawInput);
+      if (json && typeof json === 'object') {
+        parsed = json as Partial<Record<SiteExperienceKey, Partial<SiteExperienceConfig>>>;
+      }
+    } catch {
+      parsed = null;
+    }
+  } else if (rawInput && typeof rawInput === 'object') {
+    parsed = rawInput;
+  }
+
+  const mergeOne = (key: SiteExperienceKey): SiteExperienceConfig => {
+    const base = fallback[key];
+    const incoming = parsed?.[key];
+    if (!incoming || typeof incoming !== 'object') {
+      return { ...base, exampleFeatures: [...base.exampleFeatures] };
+    }
+    const cleanedFeatures = Array.isArray(incoming.exampleFeatures)
+      ? incoming.exampleFeatures
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter(Boolean)
+      : base.exampleFeatures;
+
+    return {
+      key,
+      editionLabel:
+        typeof incoming.editionLabel === 'string' && incoming.editionLabel.trim()
+          ? incoming.editionLabel.trim()
+          : base.editionLabel,
+      title:
+        typeof incoming.title === 'string' && incoming.title.trim()
+          ? incoming.title.trim()
+          : base.title,
+      featureStrip:
+        typeof incoming.featureStrip === 'string' && incoming.featureStrip.trim()
+          ? incoming.featureStrip.trim()
+          : base.featureStrip,
+      description:
+        typeof incoming.description === 'string' && incoming.description.trim()
+          ? incoming.description.trim()
+          : base.description,
+      exampleFeatures: cleanedFeatures.length > 0 ? cleanedFeatures : [...base.exampleFeatures],
+      demoSceneTitle:
+        typeof incoming.demoSceneTitle === 'string' && incoming.demoSceneTitle.trim()
+          ? incoming.demoSceneTitle.trim()
+          : base.demoSceneTitle,
+      demoSceneSubtitle:
+        typeof incoming.demoSceneSubtitle === 'string' && incoming.demoSceneSubtitle.trim()
+          ? incoming.demoSceneSubtitle.trim()
+          : base.demoSceneSubtitle,
+      demoSceneQuote:
+        typeof incoming.demoSceneQuote === 'string' && incoming.demoSceneQuote.trim()
+          ? incoming.demoSceneQuote.trim()
+          : base.demoSceneQuote,
+      ctaLabel:
+        typeof incoming.ctaLabel === 'string' && incoming.ctaLabel.trim()
+          ? incoming.ctaLabel.trim()
+          : base.ctaLabel,
+      mediaUrl: typeof incoming.mediaUrl === 'string' ? incoming.mediaUrl.trim() : base.mediaUrl,
+      mediaType: incoming.mediaType === 'video' ? 'video' : 'image',
+    };
+  };
+
+  return {
+    'chasing-her': mergeOne('chasing-her'),
+    memories: mergeOne('memories'),
+  };
+}
+
+export function serializeSiteExperiences(map: SiteExperienceShowcaseMap): string {
+  return JSON.stringify(map);
+}
+
 export interface ProjectMediaMeta {
   url: string;
   name: string;
@@ -919,19 +1113,8 @@ export function computeProjectStorageUsage(
     });
   }
 
-  // 3. Custom uploaded flower PNGs
-  (project.flower_images || []).forEach((url, idx) => {
-    if (url && !url.startsWith('data:image/svg+xml')) {
-      registerItem(
-        url,
-        'flower',
-        'flower',
-        `flower-${idx}`,
-        `Custom Flower Petal #${idx + 1}`,
-        idx
-      );
-    }
-  });
+  // 3. Signature opening flower wall is locked to the 5 built-in botanical assets
+  // and therefore never consumes customer 50 MB build storage or exposes a Remove action.
 
   let usedBytes = 0;
   let audioBytes = 0;

@@ -397,15 +397,15 @@ function RedesignedPasscodeStage({
 // STAGE 3: GLOBAL OPENING FLOWER CURTAIN OVERLAY (BOTH EDITIONS)
 // =========================================================================
 function FlowerCurtainStage({
-  images,
   whisper,
   onDone,
 }: {
-  images: string[];
+  images?: string[];
   whisper: string;
   onDone: () => void;
 }) {
-  const pool = images && images.length > 0 ? images : DEFAULT_FLOWER_POOL;
+  // Always use solely the curated 5-blossom flower wall
+  const pool = DEFAULT_FLOWER_POOL;
 
   const flowers = useMemo(() => {
     const w = 800;

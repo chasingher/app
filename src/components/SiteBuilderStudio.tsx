@@ -45,6 +45,7 @@ import {
   deleteMediaFromFirebase,
   ROMANTIC_GALLERY,
   DEFAULT_FLOWER_POOL,
+  LOCKED_FLOWER_WALL_ITEMS,
   INITIAL_MUSIC_LIBRARY,
 } from '../utils/supabaseAndOci';
 import {
@@ -620,20 +621,6 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
             photos: [...prev.photos, { url: stagedUrl, caption: cleanCaption }],
             media_meta: { ...(prev.media_meta || {}), [stagedUrl]: stagedMeta },
           }));
-        } else if (target === 'flower') {
-          if (product === 'chasing-her') {
-            setChForm((prev) => ({
-              ...prev,
-              flower_images: [...prev.flower_images, stagedUrl],
-              media_meta: { ...(prev.media_meta || {}), [stagedUrl]: stagedMeta },
-            }));
-          } else {
-            setMemForm((prev) => ({
-              ...prev,
-              flower_images: [...prev.flower_images, stagedUrl],
-              media_meta: { ...(prev.media_meta || {}), [stagedUrl]: stagedMeta },
-            }));
-          }
         } else if (target === 'mem-mosaic') {
           setMemForm((prev) => ({
             ...prev,
@@ -838,9 +825,7 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
             working.photos = working.photos.map((p) =>
               p.url === item.url ? { ...p, url: permanentUrl } : p
             );
-            working.flower_images = working.flower_images.map((u) =>
-              u === item.url ? permanentUrl : u
-            );
+            working.flower_images = [...DEFAULT_FLOWER_POOL];
             working.media_meta = {
               ...(working.media_meta || {}),
               [permanentUrl]: {
@@ -872,7 +857,7 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
       }
 
       const { committedProject, purgedStagedUrls } = commitProjectSavedMedia(
-        working,
+        { ...working, flower_images: [...DEFAULT_FLOWER_POOL] },
         'chasing-her'
       );
       for (const purgedUrl of purgedStagedUrls) {
@@ -915,9 +900,7 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
             working.memories = working.memories.map((m) =>
               m.url === item.url ? { ...m, url: permanentUrl } : m
             );
-            working.flower_images = working.flower_images.map((u) =>
-              u === item.url ? permanentUrl : u
-            );
+            working.flower_images = [...DEFAULT_FLOWER_POOL];
             working.media_meta = {
               ...(working.media_meta || {}),
               [permanentUrl]: {
@@ -949,7 +932,7 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
       }
 
       const { committedProject, purgedStagedUrls } = commitProjectSavedMedia(
-        working,
+        { ...working, flower_images: [...DEFAULT_FLOWER_POOL] },
         'memories'
       );
       for (const purgedUrl of purgedStagedUrls) {
@@ -983,22 +966,6 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
     a.download = `${slug}-${product}.html`;
     a.click();
     URL.revokeObjectURL(url);
-  };
-
-  const currentFlowerList =
-    product === 'chasing-her' ? chForm.flower_images : memForm.flower_images;
-
-  const togglePoolFlower = (flowerUrl: string) => {
-    const exists = currentFlowerList.includes(flowerUrl);
-    const nextList = exists
-      ? currentFlowerList.filter((u) => u !== flowerUrl)
-      : [...currentFlowerList, flowerUrl];
-
-    if (product === 'chasing-her') {
-      setChForm((p) => ({ ...p, flower_images: nextList }));
-    } else {
-      setMemForm((p) => ({ ...p, flower_images: nextList }));
-    }
   };
 
   const activeMusicLibrary = globalMusicLibrary.filter((m) => m.is_active);
@@ -1402,60 +1369,45 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
             </div>
           </div>
 
-          {/* 02. Opening Flower Curtain Pool (Restored for BOTH Chasing Her & Memories) */}
-          <div className="rounded-3xl bg-white border border-[#DCC397] p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* 02. Signature Opening Flower Wall (Locked 5-Blossom Collection) */}
+          <div
+            data-testid="builder-locked-flower-wall"
+            className="rounded-3xl bg-white border border-[#DCC397] p-6 space-y-4"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2 text-sm font-bold text-[#33101B]">
                   <Sparkles className="h-4 w-4 text-[#C2185B]" />
-                  <h3>02. Opening Flower Curtain ({currentFlowerList.length} selected)</h3>
+                  <h3>02. Signature Opening Flower Wall</h3>
                 </div>
                 <p className="text-xs text-[#7A5A47] mt-0.5">
-                  Spinning roses that bloom outward and part open right after unlocking
+                  Included automatically right after unlocking — our exclusive 5-blossom botanical curtain blooms open across every page.
                 </p>
               </div>
-              <label className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-[#5A1A2C] text-[#FBF3EA] text-xs font-semibold flex items-center gap-1.5 cursor-pointer hover:bg-[#42111F]">
-                <Upload className="h-3.5 w-3.5 text-[#E2B96F]" />
-                <span>Upload Flower PNG</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={(e) => handleFirebaseFileUpload(e, 'flower')}
-                  className="hidden"
-                />
-              </label>
+              <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#5A1A2C] bg-[#FBF3EA] border border-[#DCC397] rounded-lg px-2.5 py-1 whitespace-nowrap">
+                <Lock className="h-3.5 w-3.5 text-[#B98A4E]" />
+                <span>Fixed Collection · 5 Blossoms</span>
+              </div>
             </div>
 
-            <div className="space-y-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-[#7A5A47]">
-                Tap flowers from Global Pool to include/remove
-              </p>
-              <div className="flex flex-wrap gap-2.5">
-                {Array.from(new Set([...globalFlowerPool, ...currentFlowerList])).map((url, idx) => {
-                  const selected = currentFlowerList.includes(url);
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => togglePoolFlower(url)}
-                      aria-label={`Toggle flower ${idx + 1}`}
-                      className={`relative h-14 w-14 rounded-2xl p-2 border-2 transition cursor-pointer flex items-center justify-center ${
-                        selected
-                          ? 'border-[#C2185B] bg-[#FDF1E7] shadow-sm scale-105'
-                          : 'border-[#E6D5BE] bg-[#FAF7F2] opacity-55 hover:opacity-100'
-                      }`}
-                    >
-                      <img src={url} alt="" className="w-full h-full object-contain" />
-                      {selected && (
-                        <span className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-[#C2185B] text-white text-[10px] font-bold flex items-center justify-center">
-                          ✓
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+            <div className="grid grid-cols-5 gap-2.5">
+              {LOCKED_FLOWER_WALL_ITEMS.map((flower) => (
+                <div
+                  key={flower.id}
+                  className="rounded-2xl p-2.5 border border-[#E6D5BE] bg-[#FAF7F2] flex flex-col items-center gap-1.5 text-center"
+                >
+                  <div className="h-14 w-14 flex items-center justify-center">
+                    <img
+                      src={flower.url}
+                      alt={flower.name}
+                      className="w-full h-full object-contain drop-shadow-xs"
+                    />
+                  </div>
+                  <span className="text-[10px] font-medium text-[#5C3D31] leading-tight line-clamp-2">
+                    {flower.name}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
 

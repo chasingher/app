@@ -18,6 +18,10 @@ import {
   MemoriesProjectData,
   MusicLibraryTrack,
   ShowcaseMediaMap,
+  SiteExperienceShowcaseMap,
+  SITE_EXPERIENCES_SETTING_KEY,
+  mergeSiteExperiences,
+  serializeSiteExperiences,
 } from './utils/platformLogic';
 import {
   INITIAL_ORDERS,
@@ -32,6 +36,7 @@ import {
 } from './utils/supabaseAndOci';
 import {
   fetchPlatformSettingsFromFirestore,
+  savePlatformSettingsToFirestore,
   saveOrderToFirestore,
 } from './utils/firebaseClient';
 import { OrderLandingView } from './components/OrderLandingView';
@@ -66,9 +71,16 @@ export function App() {
   const [memoriesProjects, setMemoriesProjects] = useState<
     Record<string, MemoriesProjectData>
   >(INITIAL_MEMORIES_PROJECTS);
-  const [globalFlowerPool, setGlobalFlowerPool] = useState<string[]>(DEFAULT_FLOWER_POOL);
+  const globalFlowerPool = DEFAULT_FLOWER_POOL;
   const [musicLibrary, setMusicLibrary] = useState<MusicLibraryTrack[]>(INITIAL_MUSIC_LIBRARY);
   const [showcaseMedia, setShowcaseMedia] = useState<ShowcaseMediaMap>(INITIAL_SHOWCASE_MEDIA);
+  const [siteExperiences, setSiteExperiences] = useState<SiteExperienceShowcaseMap>(() => {
+    try {
+      return mergeSiteExperiences(localStorage.getItem(SITE_EXPERIENCES_SETTING_KEY));
+    } catch {
+      return mergeSiteExperiences(null);
+    }
+  });
   const [testimonials, setTestimonials] = useState<TestimonialItem[]>(INITIAL_TESTIMONIALS);
   const [settingsMap, setSettingsMap] = useState<Record<string, string>>({
     price_page: '50 GHC',
@@ -207,6 +219,18 @@ export function App() {
         const remoteSettings = await fetchPlatformSettingsFromFirestore();
         if (mounted && Object.keys(remoteSettings).length > 0) {
           setSettingsMap((prev) => ({ ...prev, ...remoteSettings }));
+          if (remoteSettings[SITE_EXPERIENCES_SETTING_KEY]) {
+            const hydrated = mergeSiteExperiences(remoteSettings[SITE_EXPERIENCES_SETTING_KEY]);
+            setSiteExperiences(hydrated);
+            try {
+              localStorage.setItem(
+                SITE_EXPERIENCES_SETTING_KEY,
+                serializeSiteExperiences(hydrated)
+              );
+            } catch {
+              // ignore storage errors
+            }
+          }
         }
       } catch {
         // Offline-first fallback already active
@@ -216,6 +240,46 @@ export function App() {
       mounted = false;
     };
   }, []);
+
+  const handleUpdateSiteExperiences = async (next: SiteExperienceShowcaseMap) => {
+    const normalized = mergeSiteExperiences(next);
+    setSiteExperiences(normalized);
+
+    const serialized = serializeSiteExperiences(normalized);
+    try {
+      localStorage.setItem(SITE_EXPERIENCES_SETTING_KEY, serialized);
+    } catch {
+      // ignore storage quota errors
+    }
+
+    setShowcaseMedia((prev) => ({
+      'chasing-her': normalized['chasing-her'].mediaUrl
+        ? {
+            media_url: normalized['chasing-her'].mediaUrl,
+            media_type: normalized['chasing-her'].mediaType || 'image',
+          }
+        : prev['chasing-her'],
+      memories: normalized.memories.mediaUrl
+        ? {
+            media_url: normalized.memories.mediaUrl,
+            media_type: normalized.memories.mediaType || 'image',
+          }
+        : prev.memories,
+    }));
+
+    const nextSettings = {
+      ...settingsMap,
+      [SITE_EXPERIENCES_SETTING_KEY]: serialized,
+    };
+    setSettingsMap(nextSettings);
+    try {
+      await savePlatformSettingsToFirestore({
+        [SITE_EXPERIENCES_SETTING_KEY]: serialized,
+      });
+    } catch {
+      // local persistence already saved
+    }
+  };
 
   const handleOrderCreated = (
     newOrder: SubmissionOrder,
@@ -458,6 +522,7 @@ export function App() {
             settingsMap={settingsMap}
             testimonials={testimonials}
             showcaseMedia={showcaseMedia}
+            siteExperiences={siteExperiences}
             chasingHerDemo={chasingHerProjects['ama-and-kofi'] || Object.values(chasingHerProjects)[0]}
             memoriesDemo={memoriesProjects['wanjiku-and-brian'] || Object.values(memoriesProjects)[0]}
             onOrderCreated={handleOrderCreated}
@@ -519,11 +584,13 @@ export function App() {
             settingsMap={settingsMap}
             onUpdateSettingsMap={setSettingsMap}
             globalFlowerPool={globalFlowerPool}
-            onUpdateFlowerPool={setGlobalFlowerPool}
+            onUpdateFlowerPool={() => {}}
             musicLibrary={musicLibrary}
             onUpdateMusicLibrary={setMusicLibrary}
             showcaseMedia={showcaseMedia}
             onUpdateShowcaseMedia={setShowcaseMedia}
+            siteExperiences={siteExperiences}
+            onUpdateSiteExperiences={handleUpdateSiteExperiences}
             testimonials={testimonials}
             onUpdateTestimonials={setTestimonials}
             onNavigateView={(target) => navigateToRoute(target)}
