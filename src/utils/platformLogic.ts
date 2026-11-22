@@ -87,8 +87,120 @@ export const COUNTRIES: Record<CountryCode, CountryConfig> = {
 };
 
 export type ActiveCountryCode = 'gh' | 'ke';
+export type AppView = 'order' | 'builder' | 'my-site' | 'admin' | 'preview';
+export type SalesCampaignId = 'reconcile' | 'birthday';
+
+export interface ResolvedAppRoute {
+  view: AppView;
+  campaign: SalesCampaignId;
+  country: ActiveCountryCode;
+}
+
+export interface SalesPageDirectoryEntry {
+  id: string;
+  campaign: SalesCampaignId;
+  country: ActiveCountryCode;
+  campaignName: string;
+  countryName: string;
+  headlinePreview: string;
+  audienceSummary: string;
+  directoryPath: string;
+}
 
 export const ACTIVE_COUNTRIES: readonly ActiveCountryCode[] = ['gh', 'ke'] as const;
+
+export const SALES_PAGE_DIRECTORY: readonly SalesPageDirectoryEntry[] = [
+  {
+    id: 'reconcile-gh',
+    campaign: 'reconcile',
+    country: 'gh',
+    campaignName: 'Win Her Back',
+    countryName: 'Ghana',
+    headlinePreview: 'Are you about to lose her?',
+    audienceSummary: 'Reconciliation & heartfelt apology love website campaign',
+    directoryPath: '/win-her-back/gh/',
+  },
+  {
+    id: 'reconcile-ke',
+    campaign: 'reconcile',
+    country: 'ke',
+    campaignName: 'Win Her Back',
+    countryName: 'Kenya',
+    headlinePreview: 'Are you about to lose her?',
+    audienceSummary: 'Reconciliation & heartfelt apology love website campaign',
+    directoryPath: '/win-her-back/ke/',
+  },
+  {
+    id: 'birthday-gh',
+    campaign: 'birthday',
+    country: 'gh',
+    campaignName: 'Birthday Gift',
+    countryName: 'Ghana',
+    headlinePreview: "Give them a birthday gift they'll never forget.",
+    audienceSummary: 'Private birthday keepsake love letter website campaign',
+    directoryPath: '/birthday/gh/',
+  },
+  {
+    id: 'birthday-ke',
+    campaign: 'birthday',
+    country: 'ke',
+    campaignName: 'Birthday Gift',
+    countryName: 'Kenya',
+    headlinePreview: "Give them a birthday gift they'll never forget.",
+    audienceSummary: 'Private birthday keepsake love letter website campaign',
+    directoryPath: '/birthday/ke/',
+  },
+] as const;
+
+export const APP_PORTAL_DIRECTORY = [
+  {
+    id: 'my-site',
+    view: 'my-site' as AppView,
+    label: 'Customer My Site Portal',
+    description: 'Order tracking, PIN access, and self-serve builder launcher.',
+    directoryPath: '/my-site/',
+  },
+  {
+    id: 'builder',
+    view: 'builder' as AppView,
+    label: 'Live Site Builder Studio',
+    description: 'Interactive Chasing Her & Memories website editor.',
+    directoryPath: '/builder/',
+  },
+  {
+    id: 'admin',
+    view: 'admin' as AppView,
+    label: 'Backstage Admin Operations',
+    description: 'Orders, fulfillment studio, Firebase 5 GB storage, and markets.',
+    directoryPath: '/admin/',
+  },
+  {
+    id: 'preview',
+    view: 'preview' as AppView,
+    label: 'Recipient Live Preview',
+    description: 'Full-screen recipient unboxing preview experience.',
+    directoryPath: '/preview/',
+  },
+] as const;
+
+export function normalizeBaseUrl(baseUrl = '/'): string {
+  const trimmed = (baseUrl || '/').trim();
+  if (!trimmed || trimmed === './' || trimmed === '.') return '/';
+  const withLeading = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return withLeading.endsWith('/') ? withLeading : `${withLeading}/`;
+}
+
+export function stripBasePath(pathname: string, baseUrl = '/'): string {
+  const cleanPath = pathname || '/';
+  const base = normalizeBaseUrl(baseUrl);
+  if (base === '/') return cleanPath;
+  const baseNoTrailing = base.slice(0, -1);
+  if (cleanPath === baseNoTrailing) return '/';
+  if (cleanPath.startsWith(base)) {
+    return `/${cleanPath.slice(base.length)}`;
+  }
+  return cleanPath;
+}
 
 export function normalizeActiveCountry(raw?: string | null): ActiveCountryCode {
   const value = (raw || '').trim().toLowerCase();
@@ -96,23 +208,40 @@ export function normalizeActiveCountry(raw?: string | null): ActiveCountryCode {
   return 'gh';
 }
 
-export function resolveCountryFromLocation(search: string, pathname: string): ActiveCountryCode {
+export function resolveCountryFromLocation(
+  search: string,
+  pathname: string,
+  baseUrl = '/'
+): ActiveCountryCode {
+  const stripped = stripBasePath(pathname, baseUrl).toLowerCase();
+  const segments = stripped.split('/').filter(Boolean);
+  if (segments.includes('ke') || segments.includes('kenya')) {
+    return 'ke';
+  }
+  if (segments.includes('gh') || segments.includes('ghana')) {
+    return 'gh';
+  }
   const params = new URLSearchParams(search);
   const queryCountry = params.get('country');
   if (queryCountry) {
     return normalizeActiveCountry(queryCountry);
-  }
-  const lowerPath = (pathname || '').toLowerCase();
-  if (/(^|\/)(ke|kenya)(\/|$)/.test(lowerPath)) {
-    return 'ke';
   }
   return 'gh';
 }
 
 export function resolveSalesCampaignFromLocation(
   search: string,
-  pathname: string
-): 'reconcile' | 'birthday' {
+  pathname: string,
+  baseUrl = '/'
+): SalesCampaignId {
+  const stripped = stripBasePath(pathname, baseUrl).toLowerCase();
+  const segments = stripped.split('/').filter(Boolean);
+  if (segments.some((seg) => seg === 'birthday' || seg === 'gift')) {
+    return 'birthday';
+  }
+  if (segments.some((seg) => seg === 'win-her-back' || seg === 'reconcile')) {
+    return 'reconcile';
+  }
   const params = new URLSearchParams(search);
   const queryCampaign = (params.get('campaign') || params.get('page') || '').trim().toLowerCase();
   if (queryCampaign === 'birthday' || queryCampaign === 'gift' || queryCampaign === '1') {
@@ -121,12 +250,79 @@ export function resolveSalesCampaignFromLocation(
   if (queryCampaign === 'reconcile' || queryCampaign === 'win-her-back' || queryCampaign === '2') {
     return 'reconcile';
   }
-  const lowerPath = (pathname || '').toLowerCase();
-  if (lowerPath.includes('birthday') || lowerPath.includes('gift')) {
-    return 'birthday';
-  }
   return 'reconcile';
 }
+
+export function resolveAppRouteFromLocation(
+  pathname: string,
+  search: string,
+  baseUrl = '/'
+): ResolvedAppRoute {
+  const stripped = stripBasePath(pathname, baseUrl).toLowerCase();
+  const segments = stripped.split('/').filter(Boolean);
+  const firstSegment = segments[0] || '';
+  const country = resolveCountryFromLocation(search, pathname, baseUrl);
+  const campaign = resolveSalesCampaignFromLocation(search, pathname, baseUrl);
+
+  if (firstSegment === 'admin' || firstSegment === 'backstage') {
+    return { view: 'admin', campaign, country };
+  }
+  if (firstSegment === 'my-site' || firstSegment === 'mysite') {
+    return { view: 'my-site', campaign, country };
+  }
+  if (firstSegment === 'builder' || firstSegment === 'studio') {
+    return { view: 'builder', campaign, country };
+  }
+  if (firstSegment === 'preview') {
+    return { view: 'preview', campaign, country };
+  }
+  if (
+    firstSegment === 'birthday' ||
+    firstSegment === 'gift' ||
+    firstSegment === 'win-her-back' ||
+    firstSegment === 'reconcile' ||
+    firstSegment === 'gh' ||
+    firstSegment === 'ke'
+  ) {
+    return { view: 'order', campaign, country };
+  }
+
+  // Backward compatibility for legacy ?view= links
+  const params = new URLSearchParams(search);
+  const legacyView = (params.get('view') || '').trim().toLowerCase();
+  if (
+    legacyView === 'admin' ||
+    legacyView === 'my-site' ||
+    legacyView === 'builder' ||
+    legacyView === 'preview'
+  ) {
+    return { view: legacyView, campaign, country };
+  }
+
+  return { view: 'order', campaign, country };
+}
+
+export function buildAppRoutePath(
+  route: {
+    view: AppView;
+    campaign?: SalesCampaignId;
+    country?: ActiveCountryCode;
+  },
+  baseUrl = '/'
+): string {
+  const prefix = normalizeBaseUrl(baseUrl);
+  const join = (relative: string) => `${prefix}${relative.replace(/^\/+/, '')}`;
+
+  if (route.view === 'admin') return join('admin/');
+  if (route.view === 'my-site') return join('my-site/');
+  if (route.view === 'builder') return join('builder/');
+  if (route.view === 'preview') return join('preview/');
+
+  const campaignSlug = route.campaign === 'birthday' ? 'birthday' : 'win-her-back';
+  const countrySlug = route.country === 'ke' ? 'ke' : 'gh';
+  return join(`${campaignSlug}/${countrySlug}/`);
+}
+
 
 const EMAIL_TYPO_MAP: Record<string, string> = {
   'gmial.com': 'gmail.com',

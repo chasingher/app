@@ -58,22 +58,22 @@ export default defineConfig(() => {
               name: 'My Site — Track My Order',
               short_name: 'My Site',
               description: 'Track your love website progress, preview, and edit',
-              url: '/?view=my-site',
-              icons: [{src: '/pwa-192x192.png', sizes: '192x192'}],
+              url: `${basePath.replace(/\/?$/, '/')}my-site/`,
+              icons: [{src: `${basePath.replace(/\/?$/, '/')}pwa-192x192.png`, sizes: '192x192'}],
             },
             {
               name: 'Backstage Admin Studio',
               short_name: 'Backstage',
-              description: 'Unified orders, site builders, Firebase 5GB storage & funnel',
-              url: '/?view=admin',
-              icons: [{src: '/pwa-192x192.png', sizes: '192x192'}],
+              description: 'Unified orders, sales pages directory, site builders & Firebase 5GB',
+              url: `${basePath.replace(/\/?$/, '/')}admin/`,
+              icons: [{src: `${basePath.replace(/\/?$/, '/')}pwa-192x192.png`, sizes: '192x192'}],
             },
             {
               name: 'Order a Love Website',
               short_name: 'Order',
               description: 'Create a Chasing Her or Memories website',
-              url: '/?view=order',
-              icons: [{src: '/pwa-192x192.png', sizes: '192x192'}],
+              url: `${basePath.replace(/\/?$/, '/')}win-her-back/gh/`,
+              icons: [{src: `${basePath.replace(/\/?$/, '/')}pwa-192x192.png`, sizes: '192x192'}],
             },
           ],
         },
@@ -130,6 +130,62 @@ export default defineConfig(() => {
           type: 'module',
         },
       }),
+      // Generates actual static directory entrypoints in dist/<dir>/index.html
+      // so GitHub Pages serves /win-her-back/gh/, /birthday/ke/, /admin/, /my-site/, etc.
+      // directly as real folders without needing ?view= query params.
+      {
+        name: 'generate-static-directory-pages',
+        apply: 'build',
+        closeBundle(error?: Error): void {
+          if (error) {
+            return;
+          }
+          const distDir = path.resolve(__dirname, 'dist');
+          const rootIndexPath = path.join(distDir, 'index.html');
+          if (!fs.existsSync(rootIndexPath)) {
+            return;
+          }
+
+          const baseHtml = fs.readFileSync(rootIndexPath, 'utf-8');
+          const staticDirectories: Array<{ dir: string; title: string }> = [
+            { dir: 'win-her-back', title: 'Chasing Her — Win Her Back' },
+            { dir: 'win-her-back/gh', title: 'Chasing Her — Win Her Back (Ghana)' },
+            { dir: 'win-her-back/ke', title: 'Chasing Her — Win Her Back (Kenya)' },
+            { dir: 'birthday', title: 'Chasing Her — Birthday Love Website' },
+            { dir: 'birthday/gh', title: 'Chasing Her — Birthday Love Website (Ghana)' },
+            { dir: 'birthday/ke', title: 'Chasing Her — Birthday Love Website (Kenya)' },
+            { dir: 'my-site', title: 'My Site — Chasing Her Customer Portal' },
+            { dir: 'builder', title: 'Site Builder Studio — Chasing Her' },
+            { dir: 'admin', title: 'Admin Backstage — Chasing Her' },
+            { dir: 'preview', title: 'Recipient Preview — Chasing Her' },
+          ];
+
+          for (const route of staticDirectories) {
+            const targetDir = path.join(distDir, route.dir);
+            fs.mkdirSync(targetDir, { recursive: true });
+
+            const depth = route.dir.split('/').filter(Boolean).length;
+            let pageHtml = baseHtml.replace(
+              /<title>.*?<\/title>/i,
+              `<title>${route.title}</title>`
+            );
+
+            // If built with a relative base ("./"), adjust asset paths to point back to dist root
+            if (basePath === './' || basePath.startsWith('./')) {
+              const upPrefix = '../'.repeat(depth);
+              pageHtml = pageHtml
+                .replace(/(src|href)="\.\/([^"]+)"/g, `$1="${upPrefix}$2"`)
+                .replace(/(src|href)='\.\/([^']+)'/g, `$1='${upPrefix}$2'`);
+            }
+
+            fs.writeFileSync(path.join(targetDir, 'index.html'), pageHtml, 'utf-8');
+          }
+
+          // Also emit 404.html fallback & .nojekyll for GitHub Pages
+          fs.writeFileSync(path.join(distDir, '404.html'), baseHtml, 'utf-8');
+          fs.writeFileSync(path.join(distDir, '.nojekyll'), '', 'utf-8');
+        },
+      },
       // Copies src/assets into dist/ so root-relative URLs like
       // "/src/assets/images/..." (e.g. generate_image output) still resolve
       // in production builds. Do not remove.

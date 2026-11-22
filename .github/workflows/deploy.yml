@@ -44,19 +44,29 @@ jobs:
       - name: Build Vite application for GitHub Pages
         env:
           # Automatically uses the repository subpath (e.g. /repo-name/) or / for custom domains
-          VITE_BASE_PATH: ${{ steps.pages.outputs.base_path || './' }}
+          VITE_BASE_PATH: ${{ steps.pages.outputs.base_path || '/' }}
           NODE_ENV: production
         run: |
           BASE_PATH="${VITE_BASE_PATH}"
-          if [ -n "$BASE_PATH" ] && [ "$BASE_PATH" != "./" ] && [ "${BASE_PATH: -1}" != "/" ]; then
+          if [ -z "$BASE_PATH" ]; then
+            BASE_PATH="/"
+          fi
+          if [ "${BASE_PATH: -1}" != "/" ]; then
             BASE_PATH="${BASE_PATH}/"
           fi
           VITE_BASE_PATH="$BASE_PATH" npm run build
 
-      - name: Enable SPA fallback for GitHub Pages
+      - name: Verify GitHub Pages static directories and SPA fallback
         run: |
-          cp dist/index.html dist/404.html
-          touch dist/.nojekyll
+          test -f dist/win-her-back/gh/index.html
+          test -f dist/win-her-back/ke/index.html
+          test -f dist/birthday/gh/index.html
+          test -f dist/birthday/ke/index.html
+          test -f dist/admin/index.html
+          test -f dist/my-site/index.html
+          test -f dist/builder/index.html
+          test -f dist/404.html
+          test -f dist/.nojekyll
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v4

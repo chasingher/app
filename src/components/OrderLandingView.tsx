@@ -36,6 +36,7 @@ import {
   validateWhatsAppPhone,
   resolveCountrySettings,
   resolveSalesCampaignFromLocation,
+  buildAppRoutePath,
   ChasingHerProjectData,
   MemoriesProjectData,
   ShowcaseMediaMap,
@@ -49,18 +50,19 @@ import { saveOrderToFirestore } from '../utils/firebaseClient';
 import { SALES_PAGE_ASSETS } from '../utils/salesPageAssets';
 import { RecipientSitePreview } from './RecipientSitePreview';
 import {
-  InteractiveProductDemoReel,
-  HoverToPlayEditionCards,
-} from './InteractiveProductDemoReel';
-import {
   ReconcileSalesCampaignContent,
   RECONCILE_OPENING_PRESETS,
 } from './ReconcileSalesCampaignContent';
+import {
+  BirthdaySalesCampaignContent,
+  BIRTHDAY_OPENING_PRESETS,
+} from './BirthdaySalesCampaignContent';
 
 export type SalesCampaignId = 'reconcile' | 'birthday';
 
 interface OrderLandingViewProps {
   country: CountryCode;
+  campaign?: SalesCampaignId;
   onChangeCountry: (country: CountryCode) => void;
   settingsMap: Record<string, string>;
   testimonials: TestimonialItem[];
@@ -124,79 +126,11 @@ const FLOWER_THEMES = [
   },
 ] as const;
 
-const OPENING_LINE_PRESETS = [
-  'Happy Birthday to the woman who makes every ordinary day feel unforgettable.',
-  'Out of all the gifts in the world, I wanted to build something that holds our story.',
-  'To my favorite person, my safe place, and my greatest adventure — Happy Birthday.',
-] as const;
-
-const OCCASION_CARDS = [
-  {
-    roman: 'I',
-    tag: 'MOST POPULAR CAMPAIGN',
-    title: 'THEIR BIRTHDAY',
-    description:
-      'Make their special day feel truly personal with a gift created around them, your memories, and everything you love about them.',
-    accent: '🎂 Midnight or Birthday Morning Reveal',
-  },
-  {
-    roman: 'II',
-    tag: 'RELATIONSHIP MILESTONE',
-    title: 'YOUR ANNIVERSARY',
-    description:
-      "Celebrate how far you've come, the moments you've shared, and the story you're still writing together.",
-    accent: '🥂 Every Chapter of Your Story Together',
-  },
-  {
-    roman: 'III',
-    tag: 'ROMANTIC TRADITION',
-    title: "VALENTINE'S DAY",
-    description:
-      'Stand out from the usual routine and give them something deeply romantic, thoughtful, and personal.',
-    accent: '🌹 More Unforgettable Than Flowers Alone',
-  },
-  {
-    roman: 'IV',
-    tag: 'SPONTANEOUS SURPRISE',
-    title: 'JUST BECAUSE',
-    description:
-      'Because sometimes the best romantic gestures are the ones they never saw coming.',
-    accent: '💌 A Random Tuesday They Will Never Forget',
-  },
-] as const;
-
-const BIRTHDAY_FAQS = [
-  {
-    q: 'Do I need to know how to code?',
-    a: 'No. Chasing Her was built so anyone can create a beautiful romantic experience without needing any technical or design skills.',
-  },
-  {
-    q: 'Do I need to be a good writer?',
-    a: "Not at all. Your message doesn't have to sound like poetry. It just has to be honest and come from your heart. The builder helps you bring everything together beautifully.",
-  },
-  {
-    q: 'Do I create it myself?',
-    a: 'Yes — you can create and customize it yourself inside the Chasing Her builder. And if you would rather have our team create it for you, you can also choose our custom-build service for an additional fee.',
-  },
-  {
-    q: 'How does my lover receive it?',
-    a: 'Once your creation is ready, you get a unique shareable link that you can send directly to them on WhatsApp, iMessage, Instagram DM, or anywhere else.',
-  },
-  {
-    q: 'When do I get access to the My Site Customer App?',
-    a: 'Immediately after payment! As soon as you complete checkout, you are automatically redirected to your standalone My Site Customer App where your builder, live order tracker, and shareable links are unlocked.',
-  },
-  {
-    q: 'Is Chasing Her only for birthdays?',
-    a: "No. While it makes an unforgettable birthday gift, you can also use it for anniversaries, Valentine's Day, apologies, long-distance surprises, or any moment you want to do something romantic for the person you love.",
-  },
-] as const;
-
 export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
   country,
+  campaign,
   onChangeCountry,
   settingsMap,
-  testimonials,
   showcaseMedia = INITIAL_SHOWCASE_MEDIA,
   chasingHerDemo,
   memoriesDemo,
@@ -205,10 +139,10 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
   const countryConfig = COUNTRIES[country] || COUNTRIES.gh;
   const funnel = resolveCountrySettings(country, settingsMap);
 
-  // Direct entry campaign resolved from URL (?campaign=birthday|reconcile or /birthday, /win-her-back)
-  const [activeCampaign] = useState<SalesCampaignId>(() =>
-    resolveSalesCampaignFromLocation(window.location.search, window.location.pathname)
-  );
+  // Direct entry campaign resolved from route prop or URL (/birthday/gh, /win-her-back/ke)
+  const activeCampaign: SalesCampaignId =
+    campaign ||
+    resolveSalesCampaignFromLocation(window.location.search, window.location.pathname, import.meta.env.BASE_URL);
 
   // Shared Checkout & Personalizer State
   const [selectedProduct, setSelectedProduct] = useState<ProductType>('chasing-her');
@@ -219,12 +153,19 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
   const [customPin, setCustomPin] = useState('140826');
   const [selectedFlowerTheme, setSelectedFlowerTheme] = useState<number>(0);
   const [customOpeningLine, setCustomOpeningLine] = useState<string>(() =>
-    resolveSalesCampaignFromLocation(window.location.search, window.location.pathname) ===
-    'birthday'
-      ? OPENING_LINE_PRESETS[0]
+    activeCampaign === 'birthday'
+      ? BIRTHDAY_OPENING_PRESETS[0]
       : RECONCILE_OPENING_PRESETS[0]
   );
   const [occasionNote, setOccasionNote] = useState('');
+
+  useEffect(() => {
+    setCustomOpeningLine(
+      activeCampaign === 'birthday'
+        ? BIRTHDAY_OPENING_PRESETS[0]
+        : RECONCILE_OPENING_PRESETS[0]
+    );
+  }, [activeCampaign]);
 
   // Checkout Flow State (Supports both Slide-Over Instant Checkout Drawer & Inline Bottom Form)
   const [checkoutDrawerOpen, setCheckoutDrawerOpen] = useState(false);
@@ -245,7 +186,6 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
 
   // Fullscreen Sample Modal
   const [livePreviewModal, setLivePreviewModal] = useState<'chasing-her' | 'memories' | null>(null);
-  const [showAllReviews, setShowAllReviews] = useState(false);
   const [copiedDemoLink, setCopiedDemoLink] = useState(false);
 
   // Reveal bottom checkout dock only after scrolling past the hero
@@ -389,7 +329,7 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
           ? 'Payment confirmed! Our studio has received your custom-build brief and is crafting your page.'
           : 'Payment confirmed! Welcome to your My Site Customer App — tap "Open Builder" below to customize your love letter.',
       pin: cleanPin,
-      hosted_url: `/?view=preview&product=${selectedProduct === 'memories' ? 'memories' : 'chasing-her'}&slug=${slug}`,
+      hosted_url: `${buildAppRoutePath({ view: 'preview' }, import.meta.env.BASE_URL)}?product=${selectedProduct === 'memories' ? 'memories' : 'chasing-her'}&slug=${slug}`,
       brief: {
         design: selectedProduct === 'memories' ? 'memories' : 'chasing-her',
         for: partnerName.trim() || 'My Partner',
@@ -457,51 +397,6 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
           { id: 'mobile_money', label: 'Paystack Instant Bank Transfer / USSD', badge: 'Instant' },
           { id: 'card', label: 'Visa / Mastercard / Verve Card', badge: 'Secure' },
         ];
-
-  const reviewShowcaseCards = [
-    {
-      badge: 'STORY 01 · CREATING THE SURPRISE',
-      roleLabel: 'How they created their experience',
-      whatsappSent: 'Babe, happy birthday ❤️ Open this when you wake up: chasingher.love/for-ama (PIN: 140826)',
-      whatsappReply: 'Wait how did you make a whole website just for me?! The Polaroids and our song 😭❤️❤️',
-      headline: '"I built her entire birthday website on my phone in 20 minutes — and it looked like I hired a designer."',
-      body:
-        testimonials[0]?.quote ||
-        'I wanted something for her birthday that she could show off to all her friends. The builder guided me step by step: I added 12 of our favorite photos, picked her favorite songs, and wrote why I love her. Having the flowers bloom when she typed her birthday PIN was pure magic.',
-      author: testimonials[0]?.customer_name || 'Kwame & Ama',
-      location: testimonials[0]?.location || 'Accra, Ghana 🇬🇭',
-      product: 'Chasing Her · Birthday Surprise',
-      previewTarget: 'chasing-her' as const,
-    },
-    {
-      badge: 'STORY 02 · THE RECIPIENT REACTION',
-      roleLabel: 'Their lover’s reaction when unlocking it',
-      whatsappSent: 'Happy birthday my queen 🎂 Tap the heart & enter the date we first met: chasingher.love/wanjiku',
-      whatsappReply: 'Brian I am literally in tears right now 😭 Hearing your voice note over our 34 photos broke me ❤️',
-      headline: '"She literally started crying before she even finished opening the wax-sealed envelope."',
-      body:
-        testimonials[1]?.quote ||
-        'At midnight on her birthday, I sent her the private link on WhatsApp and told her the passcode was the date we first met. She screen-recorded her reaction—when the flowers parted and my voice note started playing over our photos, she called me in tears saying nobody had ever done anything this thoughtful for her.',
-      author: testimonials[1]?.customer_name || 'Brian & Wanjiku',
-      location: testimonials[1]?.location || 'Nairobi, Kenya 🇰🇪',
-      product: 'Memories · 34-Photo Heart Mosaic',
-      previewTarget: 'memories' as const,
-    },
-    {
-      badge: 'STORY 03 · FINISHED CREATION + FEEDBACK',
-      roleLabel: 'Finished creation alongside their feedback',
-      whatsappSent: 'Made something special for your birthday, open with headphones on 🎧❤️ chasingher.love/abena',
-      whatsappReply: 'I just posted a screen recording on my story and all my girls are asking who built this!! 😍🔥',
-      headline: '"She posted a screen-recording on her story and every single one of her friends asked how I did it."',
-      body:
-        testimonials[2]?.quote ||
-        'Flowers fade in a week and perfume runs out, but she still opens her Chasing Her link whenever she misses me. The Polaroid wall with my little captions underneath each photo made her feel truly seen. Worth every single penny and 100% within budget.',
-      author: testimonials[2]?.customer_name || 'Kwesi & Abena',
-      location: testimonials[2]?.location || 'Kumasi, Ghana 🇬🇭',
-      product: 'Chasing Her · Polaroid & Soundtrack',
-      previewTarget: 'chasing-her' as const,
-    },
-  ];
 
   // Shared Checkout Form Renderer (Used inside both the Slide-Over Drawer and the Bottom #order-form)
   const renderCheckoutFlow = (isDrawer: boolean) => {
@@ -981,974 +876,30 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
           onOpenLivePreviewModal={(prod) => setLivePreviewModal(prod)}
         />
       ) : (
-        <>
-          {/* =====================================================================
-              HERO — CLEAR ABOVE-THE-FOLD OPENING (BIRTHDAY GIFT CAMPAIGN)
-             ===================================================================== */}
-          <header className="relative pt-10 pb-14 md:pt-16 md:pb-20 px-4 sm:px-6 overflow-hidden">
-            <img
-              src={SALES_PAGE_ASSETS.heroBlossom}
-              alt=""
-              aria-hidden="true"
-              className="pointer-events-none select-none hidden xl:block absolute -top-4 -left-8 w-36 opacity-45 ch-float-blossom z-0"
-              style={{ filter: 'drop-shadow(0 12px 22px rgba(90,26,44,0.14))' }}
-            />
-            <img
-              src={SALES_PAGE_ASSETS.heroButterfly}
-              alt=""
-              aria-hidden="true"
-              className="pointer-events-none select-none hidden xl:block absolute top-8 -right-6 w-32 opacity-45 ch-flutter-butterfly z-0"
-              style={{ filter: 'drop-shadow(0 12px 22px rgba(90,26,44,0.14))' }}
-            />
-
-            <div className="max-w-4xl mx-auto relative z-10 space-y-10">
-              {/* Centered Opening Headline, Subheadline & Actions */}
-              <div className="max-w-3xl mx-auto text-center space-y-5">
-                <p className="text-[11px] sm:text-xs uppercase tracking-[0.22em] text-[#9A6F3B] font-bold">
-                  Private Digital Birthday Keepsake
-                </p>
-
-                <h1 className="font-serif text-[clamp(2.4rem,5.2vw,4.25rem)] leading-[1.07] text-[#2B1710] tracking-tight text-balance">
-                  Give them a birthday gift they&apos;ll{' '}
-                  <em className="italic text-[#5A1A2C] font-medium">never forget.</em>
-                </h1>
-
-                <p className="text-lg sm:text-xl leading-relaxed text-[#5C4033] max-w-2xl mx-auto text-balance">
-                  A private digital love letter made from your photos, your song, and your own words — thoughtful, romantic, and{' '}
-                  <strong className="text-[#2B1710] font-semibold">all within budget.</strong>
-                </p>
-
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => openInstantCheckout('chasing-her')}
-                    className="py-4 px-7 rounded-full bg-gradient-to-b from-[#6E2236] to-[#5A1A2C] text-[#FBF3EA] font-bold text-sm sm:text-base shadow-[0_14px_30px_-10px_rgba(90,26,44,0.55),inset_0_1px_0_rgba(255,255,255,0.2)] hover:-translate-y-0.5 transition flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>Create Their Birthday Site</span>
-                    <ArrowRight className="w-4 h-4 text-[#DCC397]" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={scrollToDemonstration}
-                    className="py-4 px-6 rounded-full bg-[#FFFDF9] border border-[#5A1A2C]/22 text-[#5A1A2C] font-bold text-sm hover:bg-[#F5DAD5]/40 transition flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-[#5A1A2C]" />
-                    <span>Watch How It Works</span>
-                  </button>
-                </div>
-
-                <p className="text-xs sm:text-sm text-[#7A5A47] flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
-                  <span className="whitespace-nowrap">
-                    One-time <strong className="text-[#5A1A2C]">{funnel.pricePage}</strong>{' '}
-                    <span className="line-through opacity-60">{funnel.priceWas}</span>
-                  </span>
-                  <span aria-hidden="true">·</span>
-                  <span className="whitespace-nowrap">PIN-protected</span>
-                  <span className="hidden sm:inline" aria-hidden="true">·</span>
-                  <span className="whitespace-nowrap">Ready in minutes</span>
-                </p>
-              </div>
-
-              {/* Centered Product Preview Showcase */}
-              <div className="max-w-3xl mx-auto rounded-[26px] overflow-hidden border border-[#B98A4E]/40 shadow-[0_24px_60px_-20px_rgba(43,23,16,0.38)] bg-[#280913] text-[#FBF3EA] grid grid-cols-1 md:grid-cols-12 items-stretch">
-                <div className="md:col-span-7 bg-[#1A050B]">
-                  <img
-                    src={SALES_PAGE_ASSETS.heroShot}
-                    alt="Preview of a Chasing Her love letter website shown on laptop and phone, with photos, a song, and a personal message"
-                    className="w-full h-full object-cover block"
-                  />
-                </div>
-
-                <div className="md:col-span-5 p-6 bg-gradient-to-b from-[#33101B] to-[#220810] flex flex-col justify-center space-y-4">
-                  <div className="space-y-1.5">
-                    <div className="text-[11px] uppercase tracking-[0.18em] text-[#DCC397] font-bold">
-                      What They Unwrap On Their Phone
-                    </div>
-                    <div className="text-base font-serif italic text-[#FBF3EA] leading-relaxed">
-                      Secret PIN · Blooming Flowers · Polaroids · Wax Letter · Song
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 md:grid-cols-1 gap-2.5 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setLivePreviewModal('chasing-her')}
-                      className="py-2.5 px-3.5 rounded-xl bg-white/10 hover:bg-white/16 border border-[#DCC397]/30 text-[#FBF3EA] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-[#DCC397] text-[#DCC397]" />
-                      <span>Live Sample 01</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setLivePreviewModal('memories')}
-                      className="py-2.5 px-3.5 rounded-xl bg-white/10 hover:bg-white/16 border border-[#DCC397]/30 text-[#FBF3EA] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                    >
-                      <Heart className="w-3.5 h-3.5 fill-[#E1A6A3] text-[#E1A6A3]" />
-                      <span>Live Sample 02</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </header>
-
-          {/* =====================================================================
-              OPENING STORY — BREATHABLE EDITORIAL LETTER (RIGHT BELOW THE HERO)
-             ===================================================================== */}
-          <section className="py-14 md:py-20 px-4 sm:px-6 border-t border-[#5A1A2C]/10 bg-[#FFFDF9]/80">
-            <div className="max-w-2xl mx-auto space-y-5 text-[16px] sm:text-[18px] leading-[1.82] text-[#2B1710]">
-              <p className="font-serif text-2xl sm:text-[28px] text-[#5A1A2C] font-medium leading-snug">
-                Their birthday is coming up...
-              </p>
-              <p>
-                You need a gift — not just any random gift, but one that feels like it was built specially for them. One that communicates your love, and one they can{' '}
-                <strong className="text-[#5A1A2C]">proudly show their friends.</strong>
-              </p>
-              <p className="text-[#7A5A47]">
-                Something new that no one has ever done for them before — thoughtful, personal, and never ordinary.
-              </p>
-
-              <div className="p-5 sm:p-6 rounded-2xl bg-[#FBF3EA] border border-[#5A1A2C]/12 space-y-1.5 text-[#5A1A2C]">
-                <p>Anyone can buy a regular gift.</p>
-                <p>Anyone can send a short birthday text.</p>
-                <p>Anyone can post a picture and write &ldquo;Happy Birthday My Love.&rdquo;</p>
-              </div>
-
-              <p>
-                When you deeply care about someone, you want their gift to say more than just{' '}
-                <em>&ldquo;Happy Birthday.&rdquo;</em> You want it to say:
-              </p>
-
-              <blockquote className="my-6 p-6 sm:p-8 rounded-[24px] bg-gradient-to-br from-[#5A1A2C] via-[#431220] to-[#280913] text-[#FBF3EA] shadow-xl border border-[#B98A4E]/40 relative overflow-hidden">
-                <div className="text-[#DCC397]/25 font-serif text-7xl leading-none absolute -top-2 left-3 select-none">
-                  &ldquo;
-                </div>
-                <p className="relative z-10 font-serif italic text-lg sm:text-[22px] leading-relaxed text-[#FBF3EA]">
-                  &ldquo;Out of all the gifts I could give you, I wanted to give you something that reminds you just how special you are to me.&rdquo;
-                </p>
-                <footer className="relative z-10 mt-3 text-xs uppercase tracking-widest text-[#DCC397]">
-                  — The feeling they will never forget
-                </footer>
-              </blockquote>
-
-              <p>
-                Something thoughtful. Something romantic. Something so personal that when they show their friends, their friends immediately know:
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-                <div className="p-4 rounded-2xl bg-[#F5E9DC] border border-[#5A1A2C]/12 text-xs sm:text-sm font-semibold text-[#5A1A2C]">
-                  You didn&apos;t just rush and buy something.
-                </div>
-                <div className="p-4 rounded-2xl bg-[#F5E9DC] border border-[#5A1A2C]/12 text-xs sm:text-sm font-semibold text-[#5A1A2C]">
-                  You actually put thought into it.
-                </div>
-                <div className="p-4 rounded-2xl bg-[#5A1A2C] text-[#FBF3EA] text-xs sm:text-sm font-semibold shadow-sm">
-                  You gave them a lasting memory.
-                </div>
-              </div>
-
-              <p className="pt-2">
-                Don&apos;t just send them a message they&apos;ll scroll past. Give them an experience made around your love, your memories, and the things that make your relationship special.
-              </p>
-              <p className="font-serif italic text-2xl sm:text-3xl text-[#5A1A2C] font-semibold">
-                Give them Chasing Her.
-              </p>
-            </div>
-          </section>
-
-      {/* =====================================================================
-          SECTION 1 — THE REVEAL (With Original Polaroid Stack & Floating Art)
-         ===================================================================== */}
-      <section className="relative py-16 md:py-24 px-5 bg-[#F5E9DC]/85 border-y border-[#5A1A2C]/10 overflow-hidden">
-        {/* Original Story Floating Butterfly & Flower */}
-        <img
-          src={SALES_PAGE_ASSETS.storyButterfly}
-          alt=""
-          aria-hidden="true"
-          className="pointer-events-none select-none absolute top-2 -right-4 sm:top-4 sm:right-10 w-18 sm:w-32 opacity-90 ch-flutter-butterfly"
-          style={{ filter: 'drop-shadow(0 10px 20px rgba(90,26,44,0.16))' }}
+        <BirthdaySalesCampaignContent
+          countryConfig={countryConfig}
+          funnel={funnel}
+          partnerName={partnerName}
+          setPartnerName={setPartnerName}
+          customPin={customPin}
+          setCustomPin={setCustomPin}
+          selectedFlowerTheme={selectedFlowerTheme}
+          setSelectedFlowerTheme={setSelectedFlowerTheme}
+          flowerThemes={FLOWER_THEMES}
+          customOpeningLine={customOpeningLine}
+          setCustomOpeningLine={setCustomOpeningLine}
+          sanitizedPartnerSlug={sanitizedPartnerSlug}
+          copiedDemoLink={copiedDemoLink}
+          onCopyDemoLink={handleCopyDemoLink}
+          chasingHerDemo={chasingHerDemo}
+          memoriesDemo={memoriesDemo}
+          showcaseMedia={showcaseMedia}
+          demoSectionRef={demoSectionRef}
+          onScrollToDemonstration={scrollToDemonstration}
+          onOpenInstantCheckout={openInstantCheckout}
+          onLockInAndScrollToForm={lockInAndScrollToForm}
+          onOpenLivePreviewModal={(prod) => setLivePreviewModal(prod)}
         />
-        <img
-          src={SALES_PAGE_ASSETS.storyFlower}
-          alt=""
-          aria-hidden="true"
-          className="pointer-events-none select-none absolute bottom-2 -left-4 sm:bottom-4 sm:left-10 w-18 sm:w-32 opacity-90 ch-float-blossom"
-          style={{ filter: 'drop-shadow(0 10px 20px rgba(90,26,44,0.16))' }}
-        />
-
-        <div className="max-w-5xl mx-auto relative z-10">
-          <div className="text-center max-w-2xl mx-auto mb-12 px-8 sm:px-0">
-            <span className="text-[11px] uppercase tracking-[0.2em] text-[#B98A4E] font-bold block mb-2">
-              Section 01 · The Reveal
-            </span>
-            <h2 className="font-serif text-3xl sm:text-4xl md:text-[42px] leading-[1.15] text-[#2B1710]">
-              Meet <em className="italic text-[#5A1A2C]">Chasing Her</em> — where you become the creator of your own romantic surprise.
-            </h2>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
-            {/* Left: The Original 3-Polaroid Stack from First Sales Page */}
-            <div className="lg:col-span-5">
-              <div className="relative h-[300px] sm:h-[340px] max-w-[390px] mx-auto">
-                <div
-                  className="absolute top-3 left-1 sm:left-2 w-[45%] bg-[#FFFDF9] p-2.5 pb-6 rounded-sm shadow-[0_18px_35px_-12px_rgba(43,23,16,0.32)] border border-[#2B1710]/5"
-                  style={{ transform: 'rotate(-7deg)' }}
-                >
-                  <div className="aspect-square rounded-[2px] overflow-hidden bg-[#E8D5C4]">
-                    <img
-                      src={SALES_PAGE_ASSETS.polaroid1}
-                      alt="Close-up of two hands holding hands"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="font-serif italic text-xs text-[#5A1A2C] text-center mt-2">
-                    &ldquo;remember this?&rdquo;
-                  </div>
-                </div>
-
-                <div
-                  className="absolute top-0 left-[27%] w-[47%] bg-[#FFFDF9] p-2.5 pb-6 rounded-sm shadow-[0_22px_42px_-12px_rgba(43,23,16,0.38)] border border-[#2B1710]/5 z-10"
-                  style={{ transform: 'rotate(4deg)' }}
-                >
-                  <div className="aspect-square rounded-[2px] overflow-hidden bg-[#E8D5C4]">
-                    <img
-                      src={SALES_PAGE_ASSETS.polaroid2}
-                      alt="Couple taking a sunlit selfie together"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="font-serif italic text-xs text-[#5A1A2C] text-center mt-2">
-                    &ldquo;us, always&rdquo;
-                  </div>
-                </div>
-
-                <div
-                  className="absolute top-7 right-1 sm:right-2 w-[45%] bg-[#FFFDF9] p-2.5 pb-6 rounded-sm shadow-[0_18px_35px_-12px_rgba(43,23,16,0.32)] border border-[#2B1710]/5 z-20"
-                  style={{ transform: 'rotate(-2deg)' }}
-                >
-                  <div className="aspect-square rounded-[2px] overflow-hidden bg-[#E8D5C4]">
-                    <img
-                      src={SALES_PAGE_ASSETS.polaroid3}
-                      alt="Couple standing together at night with a city skyline"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="font-serif italic text-xs text-[#5A1A2C] text-center mt-2">
-                    &ldquo;every little thing&rdquo;
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Right: Section 1 Narrative Copy */}
-            <div className="lg:col-span-7 bg-[#FFFBF6] border border-[#5A1A2C]/12 rounded-[28px] p-6 sm:p-9 shadow-md space-y-4 text-[16px] sm:text-[17px] leading-[1.75] text-[#2B1710]">
-              <p>
-                <strong className="text-[#5A1A2C]">Chasing Her</strong> gives you access to a simple, guided builder that lets you create a personalized digital love letter for the person you love.
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 my-4">
-                <div className="p-3.5 rounded-2xl bg-[#FBF3EA] border border-[#5A1A2C]/10 text-center">
-                  <div className="text-xs uppercase tracking-wider text-[#B98A4E] font-bold mb-1">Zero Design</div>
-                  <div className="text-sm font-semibold text-[#5A1A2C]">No designer needed</div>
-                </div>
-                <div className="p-3.5 rounded-2xl bg-[#FBF3EA] border border-[#5A1A2C]/10 text-center">
-                  <div className="text-xs uppercase tracking-wider text-[#B98A4E] font-bold mb-1">Zero Coding</div>
-                  <div className="text-sm font-semibold text-[#5A1A2C]">No programmer needed</div>
-                </div>
-                <div className="p-3.5 rounded-2xl bg-[#FBF3EA] border border-[#5A1A2C]/10 text-center">
-                  <div className="text-xs uppercase tracking-wider text-[#B98A4E] font-bold mb-1">From The Heart</div>
-                  <div className="text-sm font-semibold text-[#5A1A2C]">No pro writer needed</div>
-                </div>
-              </div>
-
-              <p>
-                Everything has already been designed to help you turn your feelings, your memories, and your favorite moments together into a romantic experience you can send directly to them.
-              </p>
-              <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#5A1A2C]/10">
-                <p className="font-serif italic text-xl text-[#5A1A2C]">
-                  You bring the love. Chasing Her turns it into something unforgettable.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => openInstantCheckout()}
-                  className="px-4 py-2 rounded-full bg-[#5A1A2C] text-[#FBF3EA] text-xs font-bold hover:bg-[#33101B] transition cursor-pointer shrink-0"
-                >
-                  Start Checkout →
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* =====================================================================
-          SECTION 2 — SEE IT FOR YOURSELF (Interactive Creator & Unboxing Reel)
-          Replaces static placeholders with an interactive 5-scene motion reel
-          + direct embedded live playable experiences for Chasing Her & Memories
-         ===================================================================== */}
-      <section
-        ref={demoSectionRef}
-        id="demonstration"
-        className="py-16 md:py-24 px-4 sm:px-6 text-[#FBF3EA] relative overflow-hidden"
-        style={{
-          background: 'linear-gradient(165deg, #1E060E 0%, #33101B 50%, #1F0710 100%)',
-        }}
-      >
-        <div className="max-w-5xl mx-auto relative z-10">
-          <InteractiveProductDemoReel
-            partnerName={partnerName}
-            customPin={customPin}
-            customOpeningLine={customOpeningLine}
-            pricePage={funnel.pricePage}
-            chasingHerDemo={chasingHerDemo}
-            memoriesDemo={memoriesDemo}
-            showcaseMedia={showcaseMedia}
-            onSelectProductAndCheckout={(prod) => openInstantCheckout(prod)}
-            onOpenFullModal={(prod) => setLivePreviewModal(prod)}
-          />
-        </div>
-      </section>
-
-      {/* =====================================================================
-          SECTION 3 — YOU'RE IN CONTROL OF YOUR CREATION
-          Live Personalizer Sandbox + Hover-to-Play Interactive Edition Cards
-         ===================================================================== */}
-      <section className="py-16 md:py-24 px-4 sm:px-6 bg-[#F5E9DC]/85 border-b border-[#5A1A2C]/10">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center max-w-2xl mx-auto mb-12">
-            <span className="text-[11px] uppercase tracking-[0.2em] text-[#B98A4E] font-bold block mb-2">
-              Section 03 · You&apos;re In Control Of Your Creation
-            </span>
-            <h2 className="font-serif text-3xl sm:text-4xl md:text-[42px] leading-[1.15] text-[#2B1710] mb-4">
-              Their gift doesn&apos;t have to look like everybody else&apos;s.
-            </h2>
-            <p className="text-[#7A5A47] text-base sm:text-lg leading-relaxed">
-              Inside the <strong className="text-[#5A1A2C]">Chasing Her</strong> builder, you shape the message in your own words and add the personal touches that matter.{' '}
-              <strong className="text-[#5A1A2C]">Try personalizing hers right now below:</strong>
-            </p>
-          </div>
-
-          {/* Interactive Live Personalizer Sandbox */}
-          <div className="bg-[#FFFBF6] rounded-[30px] border-2 border-[#B98A4E]/35 p-6 sm:p-8 md:p-10 shadow-[0_24px_60px_-20px_rgba(43,23,16,0.18)] grid grid-cols-1 lg:grid-cols-12 gap-8 items-center mb-12">
-            {/* Left: Interactive Controls */}
-            <div className="lg:col-span-6 space-y-4">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#F5DAD5] text-[#5A1A2C] text-xs font-bold uppercase tracking-wider">
-                <Sliders className="w-3.5 h-3.5" />
-                <span>Live Personalizer Preview</span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-[#2B1710] mb-1">
-                    1. Their First Name
-                  </label>
-                  <input
-                    type="text"
-                    value={partnerName}
-                    onChange={(e) => setPartnerName(e.target.value)}
-                    placeholder="e.g. Amara"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#FBF3EA] border border-[#5A1A2C]/20 text-sm font-semibold text-[#5A1A2C] focus:outline-none focus:border-[#5A1A2C]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-[#2B1710] mb-1">
-                    2. Secret Birthday PIN
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    value={customPin}
-                    onChange={(e) => setCustomPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="140826"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#FBF3EA] border border-[#5A1A2C]/20 font-mono text-sm font-bold text-[#5A1A2C] focus:outline-none focus:border-[#5A1A2C]"
-                  />
-                </div>
-              </div>
-
-              {/* 3. Flower Curtain Theme */}
-              <div>
-                <label className="block text-xs font-bold text-[#2B1710] mb-1.5">
-                  3. Opening Flower Curtain Palette
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {FLOWER_THEMES.map((theme, idx) => (
-                    <button
-                      key={theme.id}
-                      type="button"
-                      onClick={() => setSelectedFlowerTheme(idx)}
-                      className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
-                        selectedFlowerTheme === idx
-                          ? 'border-[#5A1A2C] bg-[#F5DAD5]/50 shadow-2xs'
-                          : 'border-[#2B1710]/12 bg-[#FBF3EA] hover:border-[#5A1A2C]/35'
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 mb-1">
-                        {theme.colors.map((hex) => (
-                          <span
-                            key={hex}
-                            className="w-3.5 h-3.5 rounded-full border border-black/10"
-                            style={{ backgroundColor: hex }}
-                          />
-                        ))}
-                      </div>
-                      <div className="text-[11px] font-bold text-[#2B1710] line-clamp-1">
-                        {theme.name}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* 4. Opening Line Preset */}
-              <div>
-                <label className="block text-xs font-bold text-[#2B1710] mb-1.5">
-                  4. Choose or Type Their Opening Birthday Line
-                </label>
-                <div className="space-y-1.5">
-                  {OPENING_LINE_PRESETS.map((line, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => setCustomOpeningLine(line)}
-                      className={`w-full text-left px-3 py-2 rounded-xl text-xs transition border cursor-pointer ${
-                        customOpeningLine === line
-                          ? 'bg-[#5A1A2C] text-[#FBF3EA] border-[#5A1A2C] font-semibold'
-                          : 'bg-[#FBF3EA] text-[#2B1710] border-[#2B1710]/10 hover:bg-[#F5DAD5]/35'
-                      }`}
-                    >
-                      &ldquo;{line}&rdquo;
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Right: Live Updating Gift Preview Card + Shareable Link */}
-            <div className="lg:col-span-6">
-              <div className="rounded-[24px] bg-gradient-to-b from-[#2A0812] via-[#3B0D1B] to-[#1D050C] text-[#FBF3EA] p-6 sm:p-7 border border-[#B98A4E]/45 shadow-2xl space-y-5">
-                <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Globe className="w-4 h-4 text-[#DCC397]" />
-                    <span className="font-mono text-xs text-[#DCC397]">
-                      chasingher.love/for-{sanitizedPartnerSlug}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleCopyDemoLink}
-                    className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[#DCC397] text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                  >
-                    {copiedDemoLink ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedDemoLink ? 'Copied' : 'Copy Link'}</span>
-                  </button>
-                </div>
-
-                <div className="text-center py-4 space-y-3">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#B98A4E]/20 border border-[#B98A4E]/40 text-[#DCC397] text-[11px] font-bold">
-                    <span>🔒 Protected by PIN: {customPin || '140826'}</span>
-                  </div>
-
-                  <h3 className="font-serif text-2xl sm:text-3xl text-[#FBF3EA]">
-                    Happy Birthday, <em className="italic text-[#DCC397]">{partnerName || 'My Love'}</em>
-                  </h3>
-
-                  <p className="font-serif italic text-sm sm:text-base text-[#F5DAD5]/90 max-w-md mx-auto">
-                    &ldquo;{customOpeningLine}&rdquo;
-                  </p>
-
-                  <div className="flex items-center justify-center gap-2 pt-2">
-                    <span className="text-[11px] text-[#DCC397]">
-                      Opening Bloom: <strong>{FLOWER_THEMES[selectedFlowerTheme].name}</strong>
-                    </span>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-white/15 flex flex-col sm:flex-row items-center justify-between gap-3">
-                  <div className="text-xs text-[#F5DAD5]/80">
-                    Your creation gets its own <strong className="text-white">shareable link</strong> ready to send.
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => openInstantCheckout()}
-                    className="w-full sm:w-auto px-5 py-3 rounded-full bg-gradient-to-r from-[#DCC397] to-[#B98A4E] text-[#2B1710] font-extrabold text-xs uppercase tracking-wider shadow-md hover:brightness-105 transition cursor-pointer shrink-0"
-                  >
-                    Lock In For {partnerName || 'Them'} ({funnel.pricePage}) →
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Hover-to-Play Interactive Edition Cards (Replacing static bullet cards) */}
-          <HoverToPlayEditionCards
-            pricePage={funnel.pricePage}
-            showcaseMedia={showcaseMedia}
-            onPreviewLive={(prod) => setLivePreviewModal(prod)}
-            onChooseEdition={(prod) => lockInAndScrollToForm(prod)}
-          />
-        </div>
-      </section>
-
-      {/* =====================================================================
-          SECTION 4 — MORE THAN JUST A ONE-TIME GIFT
-          Clearly shows how completing payment automatically redirects them
-          into the standalone My Site Customer App + optional Custom Build.
-         ===================================================================== */}
-      <section className="py-16 md:py-24 px-4 sm:px-6">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center max-w-2xl mx-auto mb-12">
-            <span className="text-[11px] uppercase tracking-[0.2em] text-[#B98A4E] font-bold block mb-2">
-              Section 04 · More Than Just A One-Time Gift
-            </span>
-            <h2 className="font-serif text-3xl sm:text-4xl md:text-[42px] leading-[1.15] text-[#2B1710] mb-4">
-              Your creations. Accessible whenever you need them.
-            </h2>
-            <p className="text-[#7A5A47] text-base sm:text-lg leading-relaxed">
-              The moment your payment is confirmed, you are automatically redirected to your standalone{' '}
-              <strong className="text-[#5A1A2C]">My Site Customer App</strong> — your private portal to launch the builder, track your live link, and create future surprises.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-            {/* Standalone Customer App Post-Payment Journey */}
-            <div className="lg:col-span-7 bg-[#FFFBF6] rounded-[28px] border border-[#5A1A2C]/15 p-6 sm:p-8 shadow-md flex flex-col justify-between">
-              <div>
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-5">
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F5DAD5] text-[#5A1A2C] text-xs font-bold uppercase tracking-wider">
-                    <Smartphone className="w-3.5 h-3.5" />
-                    Unlocked Immediately After Payment
-                  </span>
-                  <span className="text-xs font-semibold text-[#7A5A47]">
-                    Installable Mobile &amp; Desktop App
-                  </span>
-                </div>
-
-                <h3 className="font-serif text-2xl sm:text-3xl text-[#2B1710] mb-3">
-                  How your standalone <em className="italic text-[#5A1A2C]">My Site</em> App works after checkout:
-                </h3>
-
-                {/* 3-Step Post-Payment Visual Flow */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 my-5">
-                  <div className="p-3.5 rounded-2xl bg-[#FBF3EA] border border-[#5A1A2C]/12">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-[#B98A4E] mb-1">
-                      01 · Checkout
-                    </div>
-                    <div className="text-xs font-bold text-[#2B1710] mb-1">
-                      Lock in for {funnel.pricePage}
-                    </div>
-                    <p className="text-[11px] text-[#7A5A47]">
-                      Pay securely via Mobile Money, M-PESA, Transfer, or Card.
-                    </p>
-                  </div>
-                  <div className="p-3.5 rounded-2xl bg-[#FBF3EA] border border-[#5A1A2C]/12">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-[#B98A4E] mb-1">
-                      02 · Auto-Redirect
-                    </div>
-                    <div className="text-xs font-bold text-[#2B1710] mb-1">
-                      Enter My Site App
-                    </div>
-                    <p className="text-[11px] text-[#7A5A47]">
-                      You are redirected straight into your standalone customer portal.
-                    </p>
-                  </div>
-                  <div className="p-3.5 rounded-2xl bg-[#5A1A2C] text-[#FBF3EA]">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-[#DCC397] mb-1">
-                      03 · Build &amp; Share
-                    </div>
-                    <div className="text-xs font-bold text-white mb-1">
-                      Customize &amp; Send Link
-                    </div>
-                    <p className="text-[11px] text-[#F5DAD5]/85">
-                      Build at your pace (48h auto-save) and copy their private link.
-                    </p>
-                  </div>
-                </div>
-
-                {/* Visual Mockup of the Standalone My Site Dashboard */}
-                <div className="rounded-2xl bg-[#1E070E] text-[#FBF3EA] p-4 sm:p-5 border border-[#B98A4E]/35 space-y-3">
-                  <div className="flex items-center justify-between text-xs border-b border-white/10 pb-2.5">
-                    <span className="font-serif italic text-[#DCC397] text-sm">
-                      My Site · Standalone Customer App Preview
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[11px] font-bold">
-                      ● Unlocked Post-Payment
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-4 gap-1.5 text-[10px] text-center">
-                    <div className="p-1.5 rounded bg-[#5A1A2C] text-[#DCC397] font-bold">1. Paid ✓</div>
-                    <div className="p-1.5 rounded bg-[#5A1A2C] text-[#DCC397] font-bold">2. Builder ✓</div>
-                    <div className="p-1.5 rounded bg-[#5A1A2C] text-[#DCC397] font-bold">3. Review ✓</div>
-                    <div className="p-1.5 rounded bg-[#B98A4E] text-[#2B1710] font-extrabold">4. Live Link</div>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
-                    <div>
-                      <span className="text-[#F5DAD5]/70">Your Shareable Link: </span>
-                      <span className="font-mono text-[#DCC397]">
-                        chasingher.love/for-{sanitizedPartnerSlug}
-                      </span>
-                    </div>
-                    <span className="px-2.5 py-1 rounded bg-white/10 text-[#FBF3EA] font-mono text-[11px]">
-                      PIN: {customPin || '140826'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-[#5A1A2C]/10 flex flex-wrap items-center justify-between gap-2 text-xs text-[#7A5A47]">
-                <span>Keep track of all your creations &amp; come back anytime</span>
-                <button
-                  type="button"
-                  onClick={() => openInstantCheckout('chasing-her')}
-                  className="font-bold text-[#5A1A2C] underline cursor-pointer"
-                >
-                  Unlock My Site Access Now →
-                </button>
-              </div>
-            </div>
-
-            {/* Optional Custom-Build Service Card */}
-            <div className="lg:col-span-5 bg-gradient-to-b from-[#5A1A2C] to-[#2B0A14] text-[#FBF3EA] rounded-[28px] p-6 sm:p-8 border border-[#B98A4E]/45 shadow-xl flex flex-col justify-between">
-              <div>
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#B98A4E]/25 border border-[#B98A4E]/40 text-[#DCC397] text-xs font-bold uppercase tracking-wider mb-4">
-                  <Wand2 className="w-3.5 h-3.5" />
-                  Concierge Custom-Build Option
-                </span>
-
-                <h3 className="font-serif text-2xl sm:text-3xl text-[#FBF3EA] mb-3">
-                  Don&apos;t have the time to build it yourself? Let our team create it for you.
-                </h3>
-
-                <p className="text-sm sm:text-base text-[#F5DAD5]/90 leading-relaxed mb-5">
-                  And if you don&apos;t have the time to build it yourself, or you want our team to create something even more custom for your lover, you can also request our{' '}
-                  <strong className="text-[#DCC397]">custom-build service</strong> for an additional fee.
-                </p>
-
-                <ul className="space-y-2.5 text-xs sm:text-sm text-[#FBF3EA]/90 mb-6">
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-[#DCC397] shrink-0 mt-0.5" />
-                    <span>Complete checkout &amp; submit your photos + notes inside My Site</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-[#DCC397] shrink-0 mt-0.5" />
-                    <span>Our writers &amp; designers polish your letter and assemble the entire page</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-[#DCC397] shrink-0 mt-0.5" />
-                    <span>Track live build stages in My Site — delivered within 24 hours</span>
-                  </li>
-                </ul>
-              </div>
-
-              <div className="pt-4 border-t border-white/15 space-y-3">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-xs uppercase tracking-wider text-[#DCC397]">Done-For-You Concierge</span>
-                  <span className="font-serif text-2xl font-bold text-[#DCC397]">{funnel.priceCustom}</span>
-                </div>
-                <button
-                  type="button"
-                  data-pick="custom"
-                  onClick={() => openInstantCheckout('custom')}
-                  className="w-full py-3.5 px-5 rounded-full bg-[#DCC397] hover:bg-[#B98A4E] text-[#2B1710] font-extrabold text-sm transition cursor-pointer"
-                >
-                  Choose &ldquo;Build it for me&rdquo; ({funnel.priceCustom}) →
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* =====================================================================
-          SECTION 5 — WHAT YOU CAN USE CHASING HER FOR
-         ===================================================================== */}
-      <section className="py-16 md:py-24 px-4 sm:px-6 bg-[#F5E9DC]/80 border-y border-[#5A1A2C]/10">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center max-w-2xl mx-auto mb-12">
-            <span className="text-[11px] uppercase tracking-[0.2em] text-[#B98A4E] font-bold block mb-2">
-              Section 05 · Every Romantic Moment
-            </span>
-            <h2 className="font-serif text-3xl sm:text-4xl md:text-[42px] leading-[1.15] text-[#2B1710] mb-3">
-              A birthday is just the beginning.
-            </h2>
-            <p className="text-[#7A5A47] text-base sm:text-lg">
-              You can use <strong className="text-[#5A1A2C]">Chasing Her</strong> whenever you want to create a deeply personal romantic surprise:
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            {OCCASION_CARDS.map((card) => (
-              <div
-                key={card.title}
-                className="bg-[#FFFBF6] rounded-[26px] p-6 sm:p-8 border border-[#5A1A2C]/15 shadow-sm hover:shadow-md transition flex flex-col justify-between relative overflow-hidden"
-              >
-                <div className="font-serif text-5xl text-[#B98A4E]/15 absolute top-4 right-6 select-none">
-                  {card.roman}
-                </div>
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#B98A4E] block mb-2">
-                    {card.tag}
-                  </span>
-                  <h3 className="font-serif text-2xl text-[#5A1A2C] mb-2.5">{card.title}</h3>
-                  <p className="text-sm sm:text-base text-[#2B1710] leading-relaxed mb-5">
-                    {card.description}
-                  </p>
-                </div>
-                <div className="pt-3.5 border-t border-[#5A1A2C]/10 flex items-center justify-between text-xs font-semibold text-[#7A5A47]">
-                  <span>{card.accent}</span>
-                  <button
-                    type="button"
-                    onClick={() => openInstantCheckout('chasing-her')}
-                    className="text-[#5A1A2C] font-bold hover:underline cursor-pointer"
-                  >
-                    Create for this →
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* =====================================================================
-          SECTION 6 — HEAR FROM PEOPLE WHO HAVE EXPERIENCED IT
-          Includes real WhatsApp Midnight Reaction threads + Story Cards
-         ===================================================================== */}
-      <section className="py-16 md:py-24 px-4 sm:px-6">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center max-w-2xl mx-auto mb-12">
-            <span className="text-[11px] uppercase tracking-[0.2em] text-[#B98A4E] font-bold block mb-2">
-              Section 06 · Hear From People Who Have Experienced It
-            </span>
-            <h2 className="font-serif text-3xl sm:text-4xl md:text-[42px] leading-[1.15] text-[#2B1710] mb-3">
-              What did they think of <em className="italic text-[#5A1A2C]">Chasing Her</em>?
-            </h2>
-            <p className="text-[#7A5A47] text-base sm:text-lg">
-              See how thoughtful lovers created their surprise, the exact messages they got back at midnight, and what the finished creations looked like.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-            {reviewShowcaseCards.map((item, idx) => (
-              <div
-                key={idx}
-                className="bg-[#FFFBF6] rounded-[26px] border border-[#5A1A2C]/15 shadow-md overflow-hidden flex flex-col justify-between"
-              >
-                <div>
-                  <div className="bg-gradient-to-br from-[#5A1A2C] to-[#2B0A14] p-5 text-[#FBF3EA] space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-[#DCC397]">
-                        {item.badge}
-                      </span>
-                      <span className="text-[#DCC397] text-xs">★★★★★</span>
-                    </div>
-
-                    {/* Simulated Midnight WhatsApp Reaction Bubble */}
-                    <div className="space-y-1.5 pt-1">
-                      <div className="ml-6 p-2.5 rounded-2xl rounded-tr-xs bg-[#005C4B] text-[11px] text-white leading-snug">
-                        {item.whatsappSent}
-                      </div>
-                      <div className="mr-6 p-2.5 rounded-2xl rounded-tl-xs bg-[#1F2C34] text-[11px] text-emerald-100 leading-snug border border-white/10">
-                        {item.whatsappReply}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-6 space-y-3">
-                    <div className="text-[11px] font-bold uppercase tracking-wider text-[#B98A4E]">
-                      {item.roleLabel}
-                    </div>
-                    <h3 className="font-serif italic text-lg sm:text-xl text-[#5A1A2C] leading-snug">
-                      {item.headline}
-                    </h3>
-                    <p className="text-sm text-[#2B1710] leading-relaxed">{item.body}</p>
-                  </div>
-                </div>
-
-                <div className="px-6 pb-6 pt-3 border-t border-[#5A1A2C]/10 flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-bold text-[#2B1710]">{item.author}</div>
-                    <div className="text-xs text-[#7A5A47]">
-                      {item.location}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setLivePreviewModal(item.previewTarget)}
-                    className="px-3 py-1.5 rounded-full bg-[#F5DAD5] hover:bg-[#E1A6A3] text-[#5A1A2C] font-bold text-xs transition shrink-0 cursor-pointer"
-                  >
-                    Inspect Creation
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {showAllReviews && testimonials.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-              {testimonials.map((t) => (
-                <div
-                  key={t.id}
-                  className="p-5 rounded-2xl bg-[#FFFBF6] border border-[#5A1A2C]/12 shadow-xs space-y-2"
-                >
-                  <div className="text-xs text-[#B98A4E]">★★★★★</div>
-                  <p className="text-sm text-[#2B1710] italic">&ldquo;{t.quote}&rdquo;</p>
-                  <div className="text-xs font-bold text-[#5A1A2C]">
-                    — {t.customer_name} ({t.location})
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="text-center">
-            <button
-              type="button"
-              onClick={() => setShowAllReviews((prev) => !prev)}
-              className="px-6 py-3 rounded-full bg-[#FFFBF6] border border-[#5A1A2C]/25 text-[#5A1A2C] font-bold text-xs sm:text-sm hover:bg-[#F5DAD5]/45 transition cursor-pointer"
-            >
-              {showAllReviews ? 'Hide Extra Customer Stories' : 'See More Customer Stories'}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* =====================================================================
-          SECTION 7 — YOUR CHASING HER ACCESS (Luxury Wine & Gold Vault Pass)
-         ===================================================================== */}
-      <section className="py-16 md:py-24 px-4 sm:px-6 bg-[#F5E9DC]/70 border-t border-[#5A1A2C]/10">
-        <div className="max-w-3xl mx-auto">
-          <div className="text-center mb-8">
-            <span className="text-[11px] uppercase tracking-[0.2em] text-[#B98A4E] font-bold block mb-2">
-              Section 07 · Your Chasing Her Access
-            </span>
-            <h2 className="font-serif text-3xl sm:text-4xl md:text-[42px] leading-[1.15] text-[#2B1710]">
-              Everything you need to start creating your romantic surprise.
-            </h2>
-          </div>
-
-          <div
-            className="rounded-[32px] p-7 sm:p-10 md:p-12 text-[#FBF3EA] border-2 border-[#B98A4E]/45 shadow-[0_28px_65px_-20px_rgba(51,16,27,0.55)] relative overflow-hidden"
-            style={{
-              background: 'linear-gradient(160deg, #5A1A2C 0%, #280913 100%)',
-            }}
-          >
-            <div
-              className="pointer-events-none absolute -top-24 -right-24 w-72 h-72 rounded-full"
-              style={{
-                background: 'radial-gradient(circle, rgba(220,195,151,0.22), transparent 65%)',
-              }}
-            />
-
-            <span className="inline-block px-3.5 py-1 rounded-full bg-[#DCC397]/15 border border-[#DCC397]/40 text-[#DCC397] text-[11px] font-bold uppercase tracking-widest mb-5">
-              Birthday Campaign Access Pass · {countryConfig.flag} {countryConfig.name}
-            </span>
-
-            <p className="text-base sm:text-lg text-[#F5DAD5] mb-5">
-              When you get access to <strong className="text-white">Chasing Her</strong>, you get:
-            </p>
-
-            <ul className="space-y-3.5 text-sm sm:text-base mb-7">
-              <li className="flex items-start gap-3">
-                <span className="text-[#DCC397] font-bold text-lg leading-none mt-0.5">✓</span>
-                <span>
-                  <strong className="text-white">The Chasing Her Builder</strong> — to design and customize your love letter (choose <em>Chasing Her</em> or <em>Memories</em>)
-                </span>
-              </li>
-              <li className="flex items-start gap-3">
-                <span className="text-[#DCC397] font-bold text-lg leading-none mt-0.5">✓</span>
-                <span>
-                  <strong className="text-white">Your Standalone Customer App (My Site)</strong> — automatically unlocked &amp; redirected to right after payment
-                </span>
-              </li>
-              <li className="flex items-start gap-3">
-                <span className="text-[#DCC397] font-bold text-lg leading-none mt-0.5">✓</span>
-                <span>
-                  <strong className="text-white">Your Personalized Experience</strong> — built with your words, memories, opening flowers, and romantic touches
-                </span>
-              </li>
-              <li className="flex items-start gap-3">
-                <span className="text-[#DCC397] font-bold text-lg leading-none mt-0.5">✓</span>
-                <span>
-                  <strong className="text-white">A Shareable Link</strong> — protected by a secret PIN so you can easily send it to your lover
-                </span>
-              </li>
-              <li className="flex items-start gap-3 pt-2 border-t border-white/10">
-                <span className="text-[#DCC397] font-bold text-lg leading-none mt-0.5">★</span>
-                <span>
-                  <strong className="text-[#DCC397]">48 hours</strong> to build at your own pace (auto-saved) +{' '}
-                  <strong className="text-[#DCC397]">30 days</strong> of live hosting +{' '}
-                  <strong className="text-[#DCC397]">Free edits</strong> until you love it
-                </span>
-              </li>
-            </ul>
-
-            <div className="p-4 rounded-2xl bg-white/8 border border-white/15 text-xs sm:text-sm text-[#F5DAD5] mb-7">
-              Prefer our team to build the entire experience for you? Select our{' '}
-              <strong className="text-[#DCC397]">Custom-Build Service ({funnel.priceCustom})</strong> during checkout.
-            </div>
-
-            <div className="flex flex-wrap items-baseline gap-3 mb-2">
-              <span className="font-serif text-4xl sm:text-5xl font-bold text-[#DCC397]">
-                {funnel.pricePage}
-              </span>
-              <span className="text-lg line-through text-[#FBF3EA]/45">{funnel.priceWas}</span>
-              <span className="px-2.5 py-1 rounded-full bg-[#DCC397] text-[#33101B] text-[11px] font-extrabold uppercase tracking-wider">
-                75% Off Campaign Price
-              </span>
-            </div>
-            <p className="text-xs text-[#FBF3EA]/75 mb-7">
-              One-time payment · Instant redirect to My Site · {countryConfig.paymentMethodsLabel}
-            </p>
-
-            <button
-              type="button"
-              onClick={() => openInstantCheckout('chasing-her')}
-              className="w-full py-4 px-6 rounded-full bg-gradient-to-b from-[#DCC397] to-[#B98A4E] text-[#2B1710] font-extrabold text-base shadow-lg hover:brightness-105 transition flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <span>Create My Love Letter</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* =====================================================================
-          SECTION 8 — BEFORE YOU GET STARTED (FAQ)
-         ===================================================================== */}
-      <section className="py-16 md:py-24 px-4 sm:px-6">
-        <div className="max-w-2xl mx-auto">
-          <div className="text-center mb-10">
-            <span className="text-[11px] uppercase tracking-[0.2em] text-[#B98A4E] font-bold block mb-2">
-              Section 08 · Before You Get Started
-            </span>
-            <h2 className="font-serif text-3xl sm:text-4xl text-[#2B1710]">
-              Quick answers before you start
-            </h2>
-          </div>
-
-          <div className="space-y-3">
-            {BIRTHDAY_FAQS.map((item, idx) => (
-              <details
-                key={idx}
-                open={idx === 0}
-                className="group bg-[#FFFBF6] border border-[#5A1A2C]/14 rounded-2xl px-5 py-4 shadow-2xs"
-              >
-                <summary className="font-serif text-base sm:text-lg font-medium text-[#2B1710] cursor-pointer list-none flex items-center justify-between gap-3">
-                  <span>{item.q}</span>
-                  <span className="text-[#B98A4E] text-xl font-normal transition-transform group-open:rotate-45">
-                    +
-                  </span>
-                </summary>
-                <p className="mt-2.5 text-sm sm:text-[15px] text-[#7A5A47] leading-relaxed">
-                  {item.a}
-                </p>
-              </details>
-            ))}
-          </div>
-        </div>
-      </section>
-      </>
       )}
 
       {/* =====================================================================
@@ -2009,35 +960,36 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
             />
 
             <span className="text-[11px] uppercase tracking-[0.2em] text-[#B98A4E] font-bold block mb-2">
-              Section 09 · The Final Push
+              07 · Create Their Birthday Love Letter
             </span>
 
             <h2 className="font-serif text-3xl sm:text-4xl md:text-[42px] leading-[1.15] text-[#2B1710] mb-4">
-              Their birthday is coming. And the question is...{' '}
-              <em className="italic text-[#5A1A2C]">What are you going to give them?</em>
+              CREATE THEIR BIRTHDAY SURPRISE WITH{' '}
+              <em className="italic text-[#5A1A2C]">CHASING HER</em>
             </h2>
 
             <div className="space-y-3 text-base sm:text-lg text-[#7A5A47] max-w-xl mx-auto mb-7 leading-relaxed">
-              <p>Something ordinary?</p>
-              <p>Or something thoughtful, romantic, and unforgettable?</p>
               <p className="text-[#2B1710] font-medium">
-                Something that makes them feel deeply loved... and proud to show the people around them what you did for them?
+                Their birthday is coming — give them something they&apos;ll never forget.
               </p>
-              <p className="font-serif italic text-2xl text-[#5A1A2C] font-semibold pt-1">
-                Create it with Chasing Her.
+              <p>Something personal.</p>
+              <p>Something thoughtful.</p>
+              <p>Something they&apos;ll proudly show the people around them.</p>
+              <p className="font-serif text-xl sm:text-2xl text-[#5A1A2C] font-semibold pt-2">
+                You don&apos;t have to be a designer or a poet. You just have to love them.
               </p>
             </div>
 
             <button
               type="button"
-              onClick={() => openInstantCheckout()}
-              className="inline-flex items-center justify-center gap-2 py-4 px-7 rounded-full bg-gradient-to-b from-[#6E2236] to-[#5A1A2C] text-[#FBF3EA] font-bold text-sm sm:text-base shadow-[0_14px_30px_-10px_rgba(90,26,44,0.55)] hover:-translate-y-0.5 transition cursor-pointer"
+              onClick={() => openInstantCheckout('chasing-her')}
+              className="inline-flex items-center justify-center gap-2 py-4 px-8 rounded-full bg-gradient-to-b from-[#6E2236] to-[#5A1A2C] text-[#FBF3EA] font-bold text-sm sm:text-base shadow-[0_14px_30px_-10px_rgba(90,26,44,0.55)] hover:-translate-y-0.5 transition cursor-pointer"
             >
-              <span>Create Their Personalized Love Letter</span>
+              <span>Create Their Birthday Site Now</span>
               <ArrowRight className="w-4 h-4 text-[#DCC397]" />
             </button>
-            <p className="font-serif italic text-sm text-[#5A1A2C] mt-2.5">
-              Make it personal. Make it romantic. Make it yours.
+            <p className="font-serif italic text-base text-[#5A1A2C] mt-3">
+              Chasing Her — Make it personal. Make it romantic. Make it yours.
             </p>
           </div>
         )}

@@ -38,12 +38,18 @@ import {
 import {
   COUNTRIES,
   ACTIVE_COUNTRIES,
+  ActiveCountryCode,
+  AppView,
   CountryCode,
   OrderProgressStage,
   ChasingHerProjectData,
   MemoriesProjectData,
   MusicLibraryTrack,
   ShowcaseMediaMap,
+  SalesCampaignId,
+  SALES_PAGE_DIRECTORY,
+  APP_PORTAL_DIRECTORY,
+  buildAppRoutePath,
   resolveCountrySettings,
   validateFirebaseStorageConfig,
   formatStorageCompact,
@@ -123,11 +129,22 @@ interface UnifiedAdminBackstageViewProps {
   onUpdateShowcaseMedia: (media: ShowcaseMediaMap) => void;
   testimonials: TestimonialItem[];
   onUpdateTestimonials: (items: TestimonialItem[]) => void;
-  onNavigateView?: (view: 'order' | 'my-site' | 'builder') => void;
+  onNavigateView?: (target: {
+    view: AppView;
+    campaign?: SalesCampaignId;
+    country?: ActiveCountryCode;
+  }) => void;
   autoUnlock?: boolean;
 }
 
-type AdminTab = 'orders' | 'studio' | 'assets' | 'testimonials' | 'firebase' | 'countries';
+type AdminTab =
+  | 'orders'
+  | 'sales-pages'
+  | 'studio'
+  | 'assets'
+  | 'testimonials'
+  | 'firebase'
+  | 'countries';
 
 const PROGRESS_STAGES: { id: OrderProgressStage; label: string; short: string }[] = [
   { id: 'received', label: 'Order Received', short: 'Received' },
@@ -140,6 +157,10 @@ const TAB_TITLES: Record<AdminTab, { title: string; subtitle: string }> = {
   orders: {
     title: 'Orders & Fulfillment',
     subtitle: 'Verify payments, advance build stages, and deliver live links across Ghana & Kenya.',
+  },
+  'sales-pages': {
+    title: 'Sales Pages Directory',
+    subtitle: 'Every live Ghana & Kenya campaign landing page and standalone portal directory.',
   },
   studio: {
     title: 'Site Builder Studio',
@@ -715,7 +736,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
             {onNavigateView && (
               <button
                 type="button"
-                onClick={() => onNavigateView('order')}
+                onClick={() => onNavigateView({ view: 'order' })}
                 className="text-xs text-[#FBF3EA]/60 hover:text-[#E2B96F] transition-colors cursor-pointer"
               >
                 ← Return to Storefront
@@ -760,6 +781,12 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
           icon: Package,
           count: orders.length,
           alert: needsConfirmCount > 0,
+        },
+        {
+          id: 'sales-pages',
+          label: 'Sales Pages',
+          icon: Store,
+          count: SALES_PAGE_DIRECTORY.length,
         },
         {
           id: 'studio',
@@ -852,27 +879,17 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
           ))}
         </nav>
 
-        {/* Sidebar Footer: Storefront Shortcuts & Lock */}
+        {/* Sidebar Footer: Customer App Shortcut & Lock */}
         <div className="p-3 border-t border-[#E2B96F]/15 space-y-1">
           {onNavigateView && (
-            <>
-              <button
-                type="button"
-                onClick={() => onNavigateView('order')}
-                className="w-full min-h-[38px] px-3 rounded-lg text-xs text-[#FBF3EA]/65 hover:text-[#FBF3EA] hover:bg-[#220911] flex items-center gap-2.5 transition-colors cursor-pointer"
-              >
-                <Store className="w-3.5 h-3.5 text-[#E2B96F]/80 shrink-0" />
-                <span>Sales Landing Page</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onNavigateView('my-site')}
-                className="w-full min-h-[38px] px-3 rounded-lg text-xs text-[#FBF3EA]/65 hover:text-[#FBF3EA] hover:bg-[#220911] flex items-center gap-2.5 transition-colors cursor-pointer"
-              >
-                <UserCheck className="w-3.5 h-3.5 text-[#E2B96F]/80 shrink-0" />
-                <span>Customer My Site</span>
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => onNavigateView({ view: 'my-site' })}
+              className="w-full min-h-[38px] px-3 rounded-lg text-xs text-[#FBF3EA]/65 hover:text-[#FBF3EA] hover:bg-[#220911] flex items-center gap-2.5 transition-colors cursor-pointer"
+            >
+              <UserCheck className="w-3.5 h-3.5 text-[#E2B96F]/80 shrink-0" />
+              <span>Customer My Site</span>
+            </button>
           )}
           <button
             type="button"
@@ -2281,68 +2298,48 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                 </div>
               )}
 
-              {/* Direct Entry Sales Page Links (Ghana & Kenya — Keeps public sales pages uncluttered) */}
+              {/* Direct Entry Sales Page Links (Ghana & Kenya — Clean Directory URLs) */}
               <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 p-5 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#FBF3EA]/10 pb-3.5">
                   <div>
                     <h2 className="font-serif text-xl text-[#FBF3EA]">
-                      Direct Sales Page Links (Ghana &amp; Kenya)
+                      Direct Sales Page Directories (Ghana &amp; Kenya)
                     </h2>
                     <p className="text-xs text-[#FBF3EA]/65 mt-0.5">
-                      Use these direct URLs in ads and bio links so visitors land straight on the right campaign and currency with zero page-switcher clutter.
+                      Each campaign has its own dedicated static directory for GitHub Pages and ad campaigns—no query parameters required.
                     </p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {[
-                    {
-                      key: 'reconcile-gh',
-                      campaignLabel: 'Win Her Back · "Are you about to lose her?"',
-                      countryLabel: '🇬🇭 Ghana (GH₵)',
-                      path: '/?view=order&campaign=reconcile&country=gh',
-                    },
-                    {
-                      key: 'reconcile-ke',
-                      campaignLabel: 'Win Her Back · "Are you about to lose her?"',
-                      countryLabel: '🇰🇪 Kenya (KSh)',
-                      path: '/?view=order&campaign=reconcile&country=ke',
-                    },
-                    {
-                      key: 'birthday-gh',
-                      campaignLabel: 'Birthday Gift · "A gift they\'ll never forget"',
-                      countryLabel: '🇬🇭 Ghana (GH₵)',
-                      path: '/?view=order&campaign=birthday&country=gh',
-                    },
-                    {
-                      key: 'birthday-ke',
-                      campaignLabel: 'Birthday Gift · "A gift they\'ll never forget"',
-                      countryLabel: '🇰🇪 Kenya (KSh)',
-                      path: '/?view=order&campaign=birthday&country=ke',
-                    },
-                  ].map((entry) => {
+                  {SALES_PAGE_DIRECTORY.map((entry) => {
+                    const routePath = buildAppRoutePath(
+                      { view: 'order', campaign: entry.campaign, country: entry.country },
+                      import.meta.env.BASE_URL
+                    );
                     const fullUrl =
                       typeof window !== 'undefined'
-                        ? `${window.location.origin}${entry.path}`
-                        : entry.path;
-                    const isCopied = copiedSalesUrlKey === entry.key;
+                        ? `${window.location.origin}${routePath}`
+                        : routePath;
+                    const isCopied = copiedSalesUrlKey === entry.id;
+                    const countryCfg = COUNTRIES[entry.country];
 
                     return (
                       <div
-                        key={entry.key}
+                        key={entry.id}
                         className="rounded-xl bg-[#120408] border border-[#E2B96F]/15 p-3.5 flex flex-col justify-between gap-3"
                       >
                         <div className="space-y-1 min-w-0">
                           <div className="flex items-center justify-between gap-2 text-xs">
                             <span className="font-semibold text-[#FBF3EA] truncate">
-                              {entry.campaignLabel}
+                              {entry.campaignName} · {entry.countryName}
                             </span>
                             <span className="font-mono text-[#E2B96F] shrink-0">
-                              {entry.countryLabel}
+                              {countryCfg.flag} {countryCfg.currencySymbol}
                             </span>
                           </div>
                           <p className="font-mono text-[11px] text-[#FBF3EA]/55 truncate">
-                            {entry.path}
+                            {routePath}
                           </p>
                         </div>
 
@@ -2351,7 +2348,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                             type="button"
                             onClick={() => {
                               navigator.clipboard?.writeText(fullUrl).catch(() => {});
-                              setCopiedSalesUrlKey(entry.key);
+                              setCopiedSalesUrlKey(entry.id);
                               setTimeout(() => setCopiedSalesUrlKey(null), 2000);
                             }}
                             className="flex-1 min-h-[34px] px-3 rounded-lg bg-[#1A060C] hover:bg-[#240912] border border-[#E2B96F]/25 text-xs font-medium text-[#FBF3EA] flex items-center justify-center gap-1.5 cursor-pointer"
@@ -2369,15 +2366,32 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                             )}
                           </button>
 
-                          <a
-                            href={entry.path}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="min-h-[34px] px-3.5 rounded-lg bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] text-xs font-semibold flex items-center gap-1.5 shrink-0"
-                          >
-                            <span>Open</span>
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </a>
+                          {onNavigateView ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onNavigateView({
+                                  view: 'order',
+                                  campaign: entry.campaign,
+                                  country: entry.country,
+                                })
+                              }
+                              className="min-h-[34px] px-3.5 rounded-lg bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                            >
+                              <span>Open</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <a
+                              href={routePath}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="min-h-[34px] px-3.5 rounded-lg bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] text-xs font-semibold flex items-center gap-1.5 shrink-0"
+                            >
+                              <span>Open</span>
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          )}
                         </div>
                       </div>
                     );
@@ -2502,6 +2516,217 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
               </div>
             </div>
           )}
+
+          {/* ================================================================
+              TAB: SALES PAGES DIRECTORY (ALL LIVE CAMPAIGNS & PORTAL ROUTES)
+          ================================================================ */}
+          {activeTab === 'sales-pages' && (
+            <div className="space-y-6" data-testid="admin-sales-pages-directory">
+              {/* Primary Campaign Landing Pages */}
+              <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 overflow-hidden">
+                <div className="px-5 py-4 border-b border-[#E2B96F]/15 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h2 className="font-serif text-xl text-[#FBF3EA]">
+                      Campaign Sales Pages ({SALES_PAGE_DIRECTORY.length})
+                    </h2>
+                    <p className="text-xs text-[#FBF3EA]/65 mt-0.5">
+                      Each page builds into its own physical directory on GitHub Pages so you can link straight to it with clean paths.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('countries')}
+                    className="min-h-[36px] px-3.5 rounded-lg border border-[#E2B96F]/25 bg-[#120408] hover:border-[#E2B96F]/55 text-xs font-medium text-[#E2B96F] inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap self-start sm:self-auto"
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>Edit Market Pricing</span>
+                  </button>
+                </div>
+
+                <div className="divide-y divide-[#E2B96F]/12">
+                  {SALES_PAGE_DIRECTORY.map((entry) => {
+                    const resolved = resolveCountrySettings(entry.country, localSettings);
+                    const countryCfg = COUNTRIES[entry.country];
+                    const routePath = buildAppRoutePath(
+                      { view: 'order', campaign: entry.campaign, country: entry.country },
+                      import.meta.env.BASE_URL
+                    );
+                    const fullUrl =
+                      typeof window !== 'undefined'
+                        ? `${window.location.origin}${routePath}`
+                        : routePath;
+                    const isCopied = copiedSalesUrlKey === entry.id;
+
+                    return (
+                      <div
+                        key={entry.id}
+                        data-testid={`sales-page-row-${entry.id}`}
+                        className="px-5 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-[#220911]/55 transition-colors"
+                      >
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                            <span className="font-serif text-lg text-[#FBF3EA]">
+                              {entry.campaignName}
+                            </span>
+                            <span className="text-xs text-[#FBF3EA]/35" aria-hidden="true">
+                              ·
+                            </span>
+                            <span className="text-xs font-medium text-[#E2B96F]">
+                              {countryCfg.flag} {entry.countryName} ({countryCfg.currencySymbol})
+                            </span>
+                          </div>
+                          <p className="text-xs text-[#FBF3EA]/70">
+                            <span className="italic text-[#FBF3EA]/85">“{entry.headlinePreview}”</span>{' '}
+                            <span className="text-[#FBF3EA]/40">—</span> {entry.audienceSummary}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-0.5 text-xs">
+                            <span className="font-mono text-[#E2B96F]/90">{routePath}</span>
+                            <span className="font-mono tabular-nums text-[#FBF3EA]/75">
+                              Page: <strong className="text-[#FBF3EA]">{resolved.pricePage}</strong>
+                            </span>
+                            <span className="font-mono tabular-nums text-[#FBF3EA]/55">
+                              Concierge: {resolved.priceCustom}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard?.writeText(fullUrl).catch(() => {});
+                              setCopiedSalesUrlKey(entry.id);
+                              setTimeout(() => setCopiedSalesUrlKey(null), 2000);
+                            }}
+                            className="min-h-[38px] px-3.5 rounded-xl bg-[#120408] hover:bg-[#240912] border border-[#E2B96F]/25 text-xs font-medium text-[#FBF3EA] inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                          >
+                            {isCopied ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 text-emerald-300" />
+                                <span className="text-emerald-300">Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5 text-[#E2B96F]" />
+                                <span>Copy Link</span>
+                              </>
+                            )}
+                          </button>
+
+                          {onNavigateView && (
+                            <button
+                              type="button"
+                              data-testid={`open-sales-page-${entry.id}`}
+                              onClick={() =>
+                                onNavigateView({
+                                  view: 'order',
+                                  campaign: entry.campaign,
+                                  country: entry.country,
+                                })
+                              }
+                              className="min-h-[38px] px-4 rounded-xl bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                            >
+                              <span>Open Page</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
+                          <a
+                            href={routePath}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`Open ${entry.campaignName} ${entry.countryName} in new tab`}
+                            className="min-h-[38px] px-3 rounded-xl border border-[#E2B96F]/25 bg-[#120408] hover:border-[#E2B96F]/55 text-xs font-medium text-[#FBF3EA]/80 hover:text-[#FBF3EA] inline-flex items-center gap-1.5 whitespace-nowrap"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 text-[#E2B96F]" />
+                            <span className="hidden sm:inline">New Tab</span>
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Standalone Portal Directories */}
+              <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 overflow-hidden">
+                <div className="px-5 py-4 border-b border-[#E2B96F]/15">
+                  <h2 className="font-serif text-xl text-[#FBF3EA]">
+                    App &amp; Portal Directories
+                  </h2>
+                  <p className="text-xs text-[#FBF3EA]/65 mt-0.5">
+                    Clean directory endpoints for the Customer App, Builder Studio, Admin Backstage, and Recipient Preview.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:gap-px bg-[#E2B96F]/12">
+                  {APP_PORTAL_DIRECTORY.map((portal) => {
+                    const routePath = buildAppRoutePath(
+                      { view: portal.view },
+                      import.meta.env.BASE_URL
+                    );
+                    const fullUrl =
+                      typeof window !== 'undefined'
+                        ? `${window.location.origin}${routePath}`
+                        : routePath;
+                    const isCopied = copiedSalesUrlKey === `portal-${portal.id}`;
+
+                    return (
+                      <div
+                        key={portal.id}
+                        className="bg-[#1A060C] p-5 flex flex-col justify-between gap-3"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-serif text-base text-[#FBF3EA]">
+                              {portal.label}
+                            </span>
+                            <span className="font-mono text-xs text-[#E2B96F]">{routePath}</span>
+                          </div>
+                          <p className="text-xs text-[#FBF3EA]/65">{portal.description}</p>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard?.writeText(fullUrl).catch(() => {});
+                              setCopiedSalesUrlKey(`portal-${portal.id}`);
+                              setTimeout(() => setCopiedSalesUrlKey(null), 2000);
+                            }}
+                            className="flex-1 min-h-[34px] px-3 rounded-lg bg-[#120408] hover:bg-[#240912] border border-[#E2B96F]/25 text-xs font-medium text-[#FBF3EA] inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            {isCopied ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 text-emerald-300" />
+                                <span className="text-emerald-300">Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5 text-[#E2B96F]" />
+                                <span>Copy Link</span>
+                              </>
+                            )}
+                          </button>
+
+                          {onNavigateView && portal.view !== 'admin' && (
+                            <button
+                              type="button"
+                              onClick={() => onNavigateView({ view: portal.view })}
+                              className="min-h-[34px] px-3.5 rounded-lg border border-[#E2B96F]/30 bg-[#120408] hover:border-[#E2B96F] text-xs font-semibold text-[#E2B96F] inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                            >
+                              <span>Open</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -2534,15 +2759,16 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
       {/* Mobile Bottom Thumb-Zone Navigation (Compact, fits 390px cleanly) */}
       <nav
         aria-label="Admin Backstage mobile navigation"
-        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-[#16050A]/96 backdrop-blur-md border-t border-[#E2B96F]/20 px-1 py-1.5 grid grid-cols-6 gap-0.5"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-[#16050A]/96 backdrop-blur-md border-t border-[#E2B96F]/20 px-1 py-1.5 grid grid-cols-7 gap-0.5"
       >
         {(
           [
             { id: 'orders' as AdminTab, label: 'Orders', icon: Package },
+            { id: 'sales-pages' as AdminTab, label: 'Pages', icon: Store },
             { id: 'studio' as AdminTab, label: 'Studio', icon: Wand2 },
             { id: 'assets' as AdminTab, label: 'Assets', icon: Sparkles },
             { id: 'testimonials' as AdminTab, label: 'Reviews', icon: Star },
-            { id: 'firebase' as AdminTab, label: 'Firebase', icon: Cloud },
+            { id: 'firebase' as AdminTab, label: 'Cloud', icon: Cloud },
             { id: 'countries' as AdminTab, label: 'Markets', icon: Globe },
           ] as const
         ).map((item) => {

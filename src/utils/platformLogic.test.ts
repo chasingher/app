@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import {
   COUNTRIES,
   ACTIVE_COUNTRIES,
+  SALES_PAGE_DIRECTORY,
+  APP_PORTAL_DIRECTORY,
   normalizeActiveCountry,
   resolveCountryFromLocation,
   resolveSalesCampaignFromLocation,
+  resolveAppRouteFromLocation,
+  buildAppRoutePath,
+  stripBasePath,
   validateCustomerEmail,
   validateWhatsAppPhone,
   resolveCountrySettings,
@@ -47,6 +52,80 @@ test('Active storefront markets focus exclusively on Ghana and Kenya with direct
   assert.equal(resolveSalesCampaignFromLocation('', '/birthday'), 'birthday');
   assert.equal(resolveSalesCampaignFromLocation('?campaign=reconcile', '/'), 'reconcile');
   assert.equal(resolveSalesCampaignFromLocation('', '/win-her-back'), 'reconcile');
+});
+
+test('Directory routing builds and resolves clean GitHub Pages folder paths without ?view= query params', () => {
+  assert.equal(SALES_PAGE_DIRECTORY.length, 4);
+  assert.equal(APP_PORTAL_DIRECTORY.length, 4);
+
+  // Root domain clean directories
+  assert.equal(
+    buildAppRoutePath({ view: 'order', campaign: 'reconcile', country: 'gh' }, '/'),
+    '/win-her-back/gh/'
+  );
+  assert.equal(
+    buildAppRoutePath({ view: 'order', campaign: 'reconcile', country: 'ke' }, '/'),
+    '/win-her-back/ke/'
+  );
+  assert.equal(
+    buildAppRoutePath({ view: 'order', campaign: 'birthday', country: 'gh' }, '/'),
+    '/birthday/gh/'
+  );
+  assert.equal(
+    buildAppRoutePath({ view: 'order', campaign: 'birthday', country: 'ke' }, '/'),
+    '/birthday/ke/'
+  );
+  assert.equal(buildAppRoutePath({ view: 'admin' }, '/'), '/admin/');
+  assert.equal(buildAppRoutePath({ view: 'my-site' }, '/'), '/my-site/');
+  assert.equal(buildAppRoutePath({ view: 'builder' }, '/'), '/builder/');
+  assert.equal(buildAppRoutePath({ view: 'preview' }, '/'), '/preview/');
+
+  // GitHub Pages repository subpath (e.g. /chasing-her/)
+  assert.equal(
+    buildAppRoutePath({ view: 'order', campaign: 'birthday', country: 'ke' }, '/chasing-her/'),
+    '/chasing-her/birthday/ke/'
+  );
+  assert.equal(stripBasePath('/chasing-her/birthday/ke/', '/chasing-her/'), '/birthday/ke/');
+
+  // Resolving clean directory paths (root and GitHub Pages subpath)
+  assert.deepEqual(resolveAppRouteFromLocation('/birthday/ke/', '', '/'), {
+    view: 'order',
+    campaign: 'birthday',
+    country: 'ke',
+  });
+  assert.deepEqual(
+    resolveAppRouteFromLocation('/chasing-her/win-her-back/gh/', '', '/chasing-her/'),
+    {
+      view: 'order',
+      campaign: 'reconcile',
+      country: 'gh',
+    }
+  );
+  assert.deepEqual(resolveAppRouteFromLocation('/chasing-her/admin/', '', '/chasing-her/'), {
+    view: 'admin',
+    campaign: 'reconcile',
+    country: 'gh',
+  });
+  assert.deepEqual(resolveAppRouteFromLocation('/my-site/', '', '/'), {
+    view: 'my-site',
+    campaign: 'reconcile',
+    country: 'gh',
+  });
+
+  // Backward compatibility for legacy ?view= links
+  assert.deepEqual(
+    resolveAppRouteFromLocation('/', '?view=order&campaign=birthday&country=ke', '/'),
+    {
+      view: 'order',
+      campaign: 'birthday',
+      country: 'ke',
+    }
+  );
+  assert.deepEqual(resolveAppRouteFromLocation('/', '?view=admin', '/'), {
+    view: 'admin',
+    campaign: 'reconcile',
+    country: 'gh',
+  });
 });
 
 test('WhatsApp phone validation normalizes Ghana, Kenya, and Nigeria local numbers to E.164', () => {

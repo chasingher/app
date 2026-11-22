@@ -19,6 +19,7 @@ import {
   OrderProgressStage,
   ChasingHerProjectData,
   MemoriesProjectData,
+  buildAppRoutePath,
   resolveCountrySettings,
   computeProjectStorageUsage,
   formatStorageMegabytes,
@@ -465,7 +466,7 @@ export const CustomerMySiteView: React.FC<CustomerMySiteViewProps> = ({
                     type="button"
                     onClick={() =>
                       handleCopyText(
-                        `${window.location.origin}/?view=preview&product=${buildProd}&slug=${order.slug}`,
+                        `${window.location.origin}${buildAppRoutePath({ view: 'preview' }, import.meta.env.BASE_URL)}?product=${buildProd}&slug=${order.slug}`,
                         `link-${order.id}`
                       )
                     }

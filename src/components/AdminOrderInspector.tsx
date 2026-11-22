@@ -19,6 +19,7 @@ import {
   CountryCode,
   OrderProgressStage,
   ProductType,
+  buildAppRoutePath,
   resolveCountrySettings,
 } from '../utils/platformLogic';
 import { SubmissionOrder } from '../utils/supabaseAndOci';
@@ -70,10 +71,11 @@ export const AdminOrderInspector: React.FC<AdminOrderInspectorProps> = ({
       ? 'memories'
       : 'chasing-her';
   const cleanPhone = order.whatsapp.replace(/[^0-9]/g, '');
+  const previewPath = `${buildAppRoutePath({ view: 'preview' }, import.meta.env.BASE_URL)}?product=${buildType}&slug=${order.slug}`;
   const shareUrl =
     typeof window !== 'undefined'
-      ? `${window.location.origin}/?view=preview&product=${buildType}&slug=${order.slug}`
-      : `/?view=preview&product=${buildType}&slug=${order.slug}`;
+      ? `${window.location.origin}${previewPath}`
+      : previewPath;
 
   const awaitingConfirm =
     Boolean(order.returned_from_payment_at) && order.status === 'pending_payment';

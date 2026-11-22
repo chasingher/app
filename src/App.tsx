@@ -7,8 +7,13 @@ import {
 } from 'lucide-react';
 import {
   ACTIVE_COUNTRIES,
+  ActiveCountryCode,
+  AppView,
   CountryCode,
-  resolveCountryFromLocation,
+  SalesCampaignId,
+  resolveAppRouteFromLocation,
+  buildAppRoutePath,
+  normalizeActiveCountry,
   ChasingHerProjectData,
   MemoriesProjectData,
   MusicLibraryTrack,
@@ -36,21 +41,18 @@ import { UnifiedAdminBackstageView } from './components/UnifiedAdminBackstageVie
 import { RecipientSitePreview } from './components/RecipientSitePreview';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallPrompt';
 
-type AppView = 'order' | 'builder' | 'my-site' | 'admin' | 'preview';
+const BASE_URL = import.meta.env.BASE_URL || '/';
 
 export function App() {
-  const [activeView, setActiveView] = useState<AppView>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const v = params.get('view');
-    if (v === 'my-site' || v === 'admin' || v === 'builder' || v === 'preview') {
-      return v;
-    }
-    return 'order';
-  });
-
-  const [country, setCountry] = useState<CountryCode>(() =>
-    resolveCountryFromLocation(window.location.search, window.location.pathname)
+  const initialRoute = resolveAppRouteFromLocation(
+    window.location.pathname,
+    window.location.search,
+    BASE_URL
   );
+
+  const [activeView, setActiveView] = useState<AppView>(initialRoute.view);
+  const [salesCampaign, setSalesCampaign] = useState<SalesCampaignId>(initialRoute.campaign);
+  const [country, setCountry] = useState<CountryCode>(initialRoute.country);
 
   const [autoStart] = useState<boolean>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -80,17 +82,122 @@ export function App() {
     ng_price_custom: '₦7,500',
   });
 
-  const [builderProduct, setBuilderProduct] = useState<'chasing-her' | 'memories'>('chasing-her');
-  const [builderSlug, setBuilderSlug] = useState<string>('ama-and-kofi');
+  const [builderProduct, setBuilderProduct] = useState<'chasing-her' | 'memories'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('product') === 'memories' ? 'memories' : 'chasing-her';
+  });
+  const [builderSlug, setBuilderSlug] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const slugParam = params.get('slug');
+    return slugParam && slugParam.trim() ? slugParam.trim() : 'ama-and-kofi';
+  });
   const [justPaidOrderId, setJustPaidOrderId] = useState<string | null>(null);
 
-  // Sync URL query params for deep links & PWA shortcuts
+  const syncBrowserDirectoryUrl = (
+    nextView: AppView,
+    nextCampaign: SalesCampaignId,
+    nextCountry: CountryCode,
+    mode: 'push' | 'replace' = 'push',
+    preservePreviewParams = false
+  ) => {
+    const nextPath = buildAppRoutePath(
+      {
+        view: nextView,
+        campaign: nextCampaign,
+        country: normalizeActiveCountry(nextCountry),
+      },
+      BASE_URL
+    );
+
+    const currentParams = new URLSearchParams(window.location.search);
+    const preserved = new URLSearchParams();
+    if (currentParams.get('autostart') === '1' && mode === 'replace') {
+      preserved.set('autostart', '1');
+    }
+    if (preservePreviewParams && nextView === 'preview') {
+      const prod = currentParams.get('product');
+      const sl = currentParams.get('slug');
+      if (prod) preserved.set('product', prod);
+      if (sl) preserved.set('slug', sl);
+    }
+
+    const querySuffix = preserved.toString() ? `?${preserved.toString()}` : '';
+    const targetUrl = `${nextPath}${querySuffix}`;
+
+    if (`${window.location.pathname}${window.location.search}` !== targetUrl) {
+      if (mode === 'push') {
+        window.history.pushState({}, '', targetUrl);
+      } else {
+        window.history.replaceState({}, '', targetUrl);
+      }
+    }
+  };
+
+  const navigateToRoute = (
+    target: {
+      view?: AppView;
+      campaign?: SalesCampaignId;
+      country?: CountryCode;
+    },
+    options?: { replace?: boolean }
+  ) => {
+    const nextView = target.view ?? activeView;
+    const nextCampaign = target.campaign ?? salesCampaign;
+    const nextCountry = target.country ?? country;
+
+    setActiveView(nextView);
+    setSalesCampaign(nextCampaign);
+    setCountry(nextCountry);
+
+    syncBrowserDirectoryUrl(
+      nextView,
+      nextCampaign,
+      nextCountry,
+      options?.replace ? 'replace' : 'push'
+    );
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
+  // Normalize legacy ?view= URLs into clean directory paths on initial mount & handle browser back/forward
   useEffect(() => {
-    const url = new URL(window.location.href);
-    url.searchParams.set('view', activeView);
-    url.searchParams.set('country', country);
-    window.history.replaceState({}, '', url.toString());
-  }, [activeView, country]);
+    const currentParams = new URLSearchParams(window.location.search);
+    if (
+      currentParams.has('view') ||
+      currentParams.has('campaign') ||
+      currentParams.has('country')
+    ) {
+      syncBrowserDirectoryUrl(
+        initialRoute.view,
+        initialRoute.campaign,
+        initialRoute.country,
+        'replace',
+        true
+      );
+    }
+
+    const onPopState = () => {
+      const resolved = resolveAppRouteFromLocation(
+        window.location.pathname,
+        window.location.search,
+        BASE_URL
+      );
+      setActiveView(resolved.view);
+      setSalesCampaign(resolved.campaign);
+      setCountry(resolved.country);
+
+      const params = new URLSearchParams(window.location.search);
+      if (resolved.view === 'preview') {
+        const prod = params.get('product');
+        const slugParam = params.get('slug');
+        if (prod === 'memories' || prod === 'chasing-her') setBuilderProduct(prod);
+        if (slugParam) setBuilderSlug(slugParam);
+      }
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Background non-blocking hydration from Firebase Firestore
   useEffect(() => {
@@ -173,9 +280,9 @@ export function App() {
     setBuilderSlug(newOrder.slug);
 
     if (destination === 'builder') {
-      setActiveView('builder');
+      navigateToRoute({ view: 'builder' });
     } else {
-      setActiveView('my-site');
+      navigateToRoute({ view: 'my-site' });
     }
   };
 
@@ -263,7 +370,7 @@ export function App() {
             {/* Zone 1: Single-element Brand Wordmark */}
             <button
               type="button"
-              onClick={() => setActiveView('my-site')}
+              onClick={() => navigateToRoute({ view: 'my-site' })}
               className="font-serif text-xl sm:text-2xl text-[#FBF3EA] tracking-tight flex items-center gap-2.5 cursor-pointer whitespace-nowrap shrink-0 hover:text-[#E2B96F] transition-colors"
             >
               <Heart className="w-5 h-5 text-[#E2B96F] fill-[#E2B96F]/25 shrink-0" />
@@ -277,7 +384,7 @@ export function App() {
             >
               <button
                 type="button"
-                onClick={() => setActiveView('my-site')}
+                onClick={() => navigateToRoute({ view: 'my-site' })}
                 className={`text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 py-1 border-b-2 ${
                   activeView === 'my-site'
                     ? 'border-[#E2B96F] text-[#E2B96F]'
@@ -289,7 +396,7 @@ export function App() {
 
               <button
                 type="button"
-                onClick={() => setActiveView('builder')}
+                onClick={() => navigateToRoute({ view: 'builder' })}
                 className={`text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 py-1 border-b-2 ${
                   activeView === 'builder'
                     ? 'border-[#E2B96F] text-[#E2B96F]'
@@ -301,7 +408,7 @@ export function App() {
 
               <button
                 type="button"
-                onClick={() => setActiveView('order')}
+                onClick={() => navigateToRoute({ view: 'order' })}
                 className="text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 py-1 border-b-2 border-transparent text-[#FBF3EA]/65 hover:text-[#E2B96F]"
               >
                 Order a Gift
@@ -315,11 +422,11 @@ export function App() {
                 role="group"
                 aria-label="Select country market"
               >
-                {ACTIVE_COUNTRIES.map((c) => (
+                {ACTIVE_COUNTRIES.map((c: ActiveCountryCode) => (
                   <button
                     key={c}
                     type="button"
-                    onClick={() => setCountry(c)}
+                    onClick={() => navigateToRoute({ country: c }, { replace: true })}
                     className={`min-h-[32px] px-2.5 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                       country === c
                         ? 'bg-[#E2B96F] text-[#16050A]'
@@ -344,15 +451,18 @@ export function App() {
         {activeView === 'order' && (
           <OrderLandingView
             country={country}
-            onChangeCountry={setCountry}
+            campaign={salesCampaign}
+            onChangeCountry={(nextCountry) =>
+              navigateToRoute({ view: 'order', country: nextCountry })
+            }
             settingsMap={settingsMap}
             testimonials={testimonials}
             showcaseMedia={showcaseMedia}
             chasingHerDemo={chasingHerProjects['ama-and-kofi'] || Object.values(chasingHerProjects)[0]}
             memoriesDemo={memoriesProjects['wanjiku-and-brian'] || Object.values(memoriesProjects)[0]}
             onOrderCreated={handleOrderCreated}
-            onOpenMySite={() => setActiveView('my-site')}
-            onOpenAdmin={() => setActiveView('admin')}
+            onOpenMySite={() => navigateToRoute({ view: 'my-site' })}
+            onOpenAdmin={() => navigateToRoute({ view: 'admin' })}
           />
         )}
 
@@ -366,7 +476,7 @@ export function App() {
               memoriesProjects={memoriesProjects}
               onSaveChasingHer={handleSaveChasingHer}
               onSaveMemories={handleSaveMemories}
-              onBackToAccount={() => setActiveView('my-site')}
+              onBackToAccount={() => navigateToRoute({ view: 'my-site' })}
               globalFlowerPool={globalFlowerPool}
               globalMusicLibrary={musicLibrary}
             />
@@ -388,7 +498,7 @@ export function App() {
                     : 'chasing-her';
                 setBuilderProduct(prod);
                 setBuilderSlug(order.slug);
-                setActiveView('builder');
+                navigateToRoute({ view: 'builder' });
               }}
               onMarkPaymentReturned={handleMarkPaymentReturned}
             />
@@ -416,7 +526,7 @@ export function App() {
             onUpdateShowcaseMedia={setShowcaseMedia}
             testimonials={testimonials}
             onUpdateTestimonials={setTestimonials}
-            onNavigateView={(view) => setActiveView(view)}
+            onNavigateView={(target) => navigateToRoute(target)}
             autoUnlock={autoStart}
           />
         )}
@@ -428,7 +538,7 @@ export function App() {
               chasingHerData={chasingHerProjects[builderSlug]}
               memoriesData={memoriesProjects[builderSlug]}
               bypassPinByDefault={autoStart}
-              onClose={() => setActiveView('my-site')}
+              onClose={() => navigateToRoute({ view: 'my-site' })}
             />
           </div>
         )}
@@ -442,7 +552,7 @@ export function App() {
         >
           <button
             type="button"
-            onClick={() => setActiveView('my-site')}
+            onClick={() => navigateToRoute({ view: 'my-site' })}
             className={`min-h-[48px] rounded-xl flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition cursor-pointer ${
               activeView === 'my-site'
                 ? 'bg-[#E2B96F]/20 text-[#E2B96F]'
@@ -455,7 +565,7 @@ export function App() {
 
           <button
             type="button"
-            onClick={() => setActiveView('builder')}
+            onClick={() => navigateToRoute({ view: 'builder' })}
             className={`min-h-[48px] rounded-xl flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition cursor-pointer ${
               activeView === 'builder'
                 ? 'bg-[#E2B96F]/20 text-[#E2B96F]'
@@ -468,7 +578,7 @@ export function App() {
 
           <button
             type="button"
-            onClick={() => setActiveView('order')}
+            onClick={() => navigateToRoute({ view: 'order' })}
             className="min-h-[48px] rounded-xl flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition cursor-pointer text-[#FBF3EA]/70"
           >
             <Sparkles className="w-4 h-4" />
