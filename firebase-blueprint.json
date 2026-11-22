@@ -365,7 +365,7 @@
         },
         "value": {
           "type": "string",
-          "maxLength": 5000
+          "maxLength": 15000
         },
         "updatedAt": {
           "type": "string",

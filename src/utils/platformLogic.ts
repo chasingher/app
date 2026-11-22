@@ -1374,4 +1374,65 @@ export function canBypassPreviewPin(params: {
   return false;
 }
 
+export type DatabaseCheckStatus = 'pass' | 'warn' | 'fail';
 
+export interface DatabaseCheckItem {
+  id: 'firestore_read' | 'security_rules' | 'admin_write' | 'storage_api';
+  label: string;
+  status: DatabaseCheckStatus;
+  detail: string;
+  latencyMs?: number;
+}
+
+export interface DatabaseConnectionReport {
+  overallStatus: 'connected' | 'read_only' | 'error';
+  summary: string;
+  checkedAt: string;
+  totalLatencyMs: number;
+  projectId: string;
+  databaseId: string;
+  storageBucket: string;
+  settingsDocCount: number;
+  authEmail: string | null;
+  authVerified: boolean;
+  isAdminSignedIn: boolean;
+  checks: DatabaseCheckItem[];
+}
+
+export function summarizeDatabaseConnectionChecks(params: {
+  checks: DatabaseCheckItem[];
+  databaseId: string;
+  totalLatencyMs: number;
+  isAdminSignedIn: boolean;
+}): {
+  overallStatus: 'connected' | 'read_only' | 'error';
+  summary: string;
+} {
+  const readCheck = params.checks.find((c) => c.id === 'firestore_read');
+  const rulesCheck = params.checks.find((c) => c.id === 'security_rules');
+  const writeCheck = params.checks.find((c) => c.id === 'admin_write');
+  const hasAnyFail = params.checks.some((c) => c.status === 'fail');
+
+  if (readCheck?.status === 'fail' || rulesCheck?.status === 'fail' || hasAnyFail) {
+    const failedLabels = params.checks
+      .filter((c) => c.status === 'fail')
+      .map((c) => c.label)
+      .join(', ');
+    return {
+      overallStatus: 'error',
+      summary: `Database check failed (${failedLabels || 'connection error'}). Verify network connectivity and Firebase configuration.`,
+    };
+  }
+
+  if (writeCheck?.status === 'pass' && params.isAdminSignedIn) {
+    return {
+      overallStatus: 'connected',
+      summary: `Firestore database (${params.databaseId}) verified live for reads & authenticated Admin writes in ${params.totalLatencyMs} ms.`,
+    };
+  }
+
+  return {
+    overallStatus: 'read_only',
+    summary: `Firestore server reachable (${params.totalLatencyMs} ms) & security rules active. Sign in with Google to verify and enable live Admin writes.`,
+  };
+}

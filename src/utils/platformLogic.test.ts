@@ -34,6 +34,7 @@ import {
   isPublicShowcaseProject,
   canCustomerAccessProjectSlug,
   canBypassPreviewPin,
+  summarizeDatabaseConnectionChecks,
 } from './platformLogic';
 import {
   buildChasingHerStandaloneHtml,
@@ -595,6 +596,50 @@ test('Personal letter privacy guards isolate customer creations from public show
     canBypassPreviewPin({ isBuilderPreview: true, isPublicShowcase: false }),
     true
   );
+});
+
+test('Database connection diagnostics accurately distinguish live read/write, read-only, and failure states', () => {
+  const fullLive = summarizeDatabaseConnectionChecks({
+    databaseId: 'ai-studio-chasingher-f7a61704-2cdd-4e3c-af0b-e387f983103a',
+    totalLatencyMs: 142,
+    isAdminSignedIn: true,
+    checks: [
+      { id: 'firestore_read', label: 'Firestore Live Server Read', status: 'pass', detail: 'OK', latencyMs: 65 },
+      { id: 'security_rules', label: 'Security Rules Enforcement', status: 'pass', detail: 'OK', latencyMs: 32 },
+      { id: 'admin_write', label: 'Admin Auth & Write Sync', status: 'pass', detail: 'OK', latencyMs: 40 },
+      { id: 'storage_api', label: 'Storage Bucket & Upload API', status: 'pass', detail: 'OK', latencyMs: 5 },
+    ],
+  });
+  assert.equal(fullLive.overallStatus, 'connected');
+  assert.ok(fullLive.summary.includes('142 ms'));
+
+  const readOnly = summarizeDatabaseConnectionChecks({
+    databaseId: 'ai-studio-chasingher-f7a61704-2cdd-4e3c-af0b-e387f983103a',
+    totalLatencyMs: 98,
+    isAdminSignedIn: false,
+    checks: [
+      { id: 'firestore_read', label: 'Firestore Live Server Read', status: 'pass', detail: 'OK', latencyMs: 52 },
+      { id: 'security_rules', label: 'Security Rules Enforcement', status: 'pass', detail: 'OK', latencyMs: 41 },
+      { id: 'admin_write', label: 'Admin Auth & Write Sync', status: 'warn', detail: 'Sign in required' },
+      { id: 'storage_api', label: 'Storage Bucket & Upload API', status: 'pass', detail: 'OK', latencyMs: 5 },
+    ],
+  });
+  assert.equal(readOnly.overallStatus, 'read_only');
+  assert.ok(readOnly.summary.includes('Sign in with Google'));
+
+  const failed = summarizeDatabaseConnectionChecks({
+    databaseId: 'ai-studio-chasingher-f7a61704-2cdd-4e3c-af0b-e387f983103a',
+    totalLatencyMs: 4200,
+    isAdminSignedIn: false,
+    checks: [
+      { id: 'firestore_read', label: 'Firestore Live Server Read', status: 'fail', detail: 'offline' },
+      { id: 'security_rules', label: 'Security Rules Enforcement', status: 'fail', detail: 'offline' },
+      { id: 'admin_write', label: 'Admin Auth & Write Sync', status: 'warn', detail: 'Sign in required' },
+      { id: 'storage_api', label: 'Storage Bucket & Upload API', status: 'pass', detail: 'OK', latencyMs: 4 },
+    ],
+  });
+  assert.equal(failed.overallStatus, 'error');
+  assert.ok(failed.summary.includes('Firestore Live Server Read'));
 });
 
 

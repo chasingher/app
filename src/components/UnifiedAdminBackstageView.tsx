@@ -36,6 +36,8 @@ import {
   Check,
   Edit3,
   X,
+  Activity,
+  Database,
 } from 'lucide-react';
 import {
   COUNTRIES,
@@ -62,7 +64,9 @@ import {
   SiteExperienceKey,
   DEFAULT_SITE_EXPERIENCES,
   deriveCleanAudioTitle,
+  DatabaseConnectionReport,
 } from '../utils/platformLogic';
+import type { User } from 'firebase/auth';
 import {
   SubmissionOrder,
   TestimonialItem,
@@ -75,8 +79,13 @@ import {
   FIREBASE_PROJECT_ID,
   FIREBASE_DATABASE_ID,
   FIREBASE_STORAGE_BUCKET,
+  FIREBASE_ADMIN_EMAIL,
+  isVerifiedAdminUser,
   savePlatformSettingsToFirestore,
-  testConnection,
+  runDatabaseConnectionTest,
+  signInWithGooglePopup,
+  signOutFirebase,
+  syncWorkspaceSnapshotToFirestore,
   cleanFirebaseStorageCatalog,
 } from '../utils/firebaseClient';
 import { PWAInstallButton } from './PWAInstallPrompt';
@@ -144,6 +153,7 @@ interface UnifiedAdminBackstageViewProps {
     campaign?: SalesCampaignId;
     country?: ActiveCountryCode;
   }) => void;
+  firebaseUser?: User | null;
   autoUnlock?: boolean;
 }
 
@@ -222,6 +232,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   testimonials,
   onUpdateTestimonials,
   onNavigateView,
+  firebaseUser = null,
   autoUnlock = false,
 }) => {
   const [unlocked, setUnlocked] = useState<boolean>(() => {
@@ -284,8 +295,13 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   // Firebase 5GB Storage & Database state
   const [firebaseStatus, setFirebaseStatus] = useState<FirebaseStatusPayload | null>(null);
   const [firebaseFeedback, setFirebaseFeedback] = useState<string | null>(null);
+  const [firebaseFeedbackTone, setFirebaseFeedbackTone] = useState<'success' | 'warning' | 'error'>('success');
   const [firebaseUploading, setFirebaseUploading] = useState(false);
   const [cleaningDb, setCleaningDb] = useState(false);
+  const [testingDb, setTestingDb] = useState(false);
+  const [dbReport, setDbReport] = useState<DatabaseConnectionReport | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [syncingWorkspace, setSyncingWorkspace] = useState(false);
 
   // Country settings state
   const [localSettings, setLocalSettings] = useState<Record<string, string>>(settingsMap);
@@ -697,17 +713,109 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
     setTimeout(() => setAssetStatusMsg(null), 3500);
   };
 
+  const handleTestDatabaseConnection = async () => {
+    setTestingDb(true);
+    setFirebaseFeedback(null);
+    try {
+      const report = await runDatabaseConnectionTest();
+      setDbReport(report);
+      await loadFirebaseState();
+      setFirebaseFeedbackTone(
+        report.overallStatus === 'connected'
+          ? 'success'
+          : report.overallStatus === 'read_only'
+          ? 'warning'
+          : 'error'
+      );
+      setFirebaseFeedback(report.summary);
+    } catch (error) {
+      setFirebaseFeedbackTone('error');
+      setFirebaseFeedback(
+        error instanceof Error
+          ? `Connection test error: ${error.message}`
+          : 'Could not reach Firebase Firestore right now.'
+      );
+    } finally {
+      setTestingDb(false);
+    }
+  };
+
+  const handleGoogleAdminSignIn = async () => {
+    setAuthBusy(true);
+    setFirebaseFeedback(null);
+    try {
+      const cred = await signInWithGooglePopup();
+      const signedEmail = cred.user?.email || 'Google account';
+      const report = await runDatabaseConnectionTest();
+      setDbReport(report);
+      setFirebaseFeedbackTone(
+        report.overallStatus === 'connected' ? 'success' : 'warning'
+      );
+      setFirebaseFeedback(
+        report.overallStatus === 'connected'
+          ? `Signed in as ${signedEmail}. Live Firestore reads & writes verified (${report.totalLatencyMs} ms).`
+          : `Signed in as ${signedEmail}. ${report.summary}`
+      );
+    } catch (error) {
+      setFirebaseFeedbackTone('error');
+      setFirebaseFeedback(
+        error instanceof Error
+          ? `Google sign-in was not completed: ${error.message}`
+          : 'Google sign-in could not be completed.'
+      );
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleGoogleAdminSignOut = async () => {
+    setAuthBusy(true);
+    try {
+      await signOutFirebase();
+      setDbReport(null);
+      setFirebaseFeedbackTone('warning');
+      setFirebaseFeedback('Signed out of Firebase Google Auth. Live Admin writes paused until sign-in.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSyncWorkspaceToFirestore = async () => {
+    setSyncingWorkspace(true);
+    setFirebaseFeedback(null);
+    try {
+      const result = await syncWorkspaceSnapshotToFirestore({
+        orders,
+        chasingHerProjects,
+        memoriesProjects,
+        settingsMap: localSettings,
+      });
+      setFirebaseFeedbackTone('success');
+      setFirebaseFeedback(
+        `Synced ${result.syncedOrders} order(s), ${result.syncedProjects} project(s), and ${result.syncedSettings} setting(s) to Firestore (${FIREBASE_DATABASE_ID}).`
+      );
+    } catch (error) {
+      setFirebaseFeedbackTone('error');
+      setFirebaseFeedback(
+        error instanceof Error ? error.message : 'Could not sync workspace to Firestore.'
+      );
+    } finally {
+      setSyncingWorkspace(false);
+    }
+  };
+
   const handleCleanFirebaseStorage = async () => {
     setCleaningDb(true);
     setFirebaseFeedback(null);
     try {
-      await cleanFirebaseStorageCatalog();
-      await testConnection();
+      const result = await cleanFirebaseStorageCatalog();
       await loadFirebaseState();
+      setFirebaseFeedbackTone('success');
       setFirebaseFeedback(
-        'Database & storage catalog cleaned. All orphaned media purged and Firebase Firestore connection verified.'
+        `Storage catalog cleaned (${result.purgedObjectsCount} file${result.purgedObjectsCount === 1 ? '' : 's'} removed from ${result.storageBucket}). Firestore database records were left untouched.`
       );
     } catch {
+      setFirebaseFeedbackTone('error');
       setFirebaseFeedback('Could not clean storage right now.');
     } finally {
       setCleaningDb(false);
@@ -1055,9 +1163,23 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
               <p className="text-xs sm:text-sm text-[#FBF3EA]/65 mt-1">{activeMeta.subtitle}</p>
             </div>
             <div className="text-xs text-[#FBF3EA]/55 flex items-center gap-2 shrink-0">
-              <span>Firebase Project: {FIREBASE_PROJECT_ID}</span>
+              <span>Firebase: {FIREBASE_PROJECT_ID}</span>
               <span aria-hidden="true">·</span>
-              <span className="text-emerald-300 font-medium">Connected</span>
+              {isVerifiedAdminUser(firebaseUser) ? (
+                <span className="text-emerald-300 font-medium">Admin Sync Live</span>
+              ) : dbReport?.overallStatus === 'error' ? (
+                <span className="text-rose-300 font-medium">Connection Issue</span>
+              ) : dbReport?.overallStatus === 'read_only' ? (
+                <span className="text-amber-300 font-medium">Server Online · Sign In for Writes</span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('firebase')}
+                  className="text-[#E2B96F] hover:underline font-medium cursor-pointer"
+                >
+                  Check Database
+                </button>
+              )}
             </div>
           </div>
 
@@ -2291,11 +2413,102 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                 </div>
 
                 <div className="rounded-xl bg-[#120408] border border-[#E2B96F]/15 p-3.5 flex items-center justify-between text-xs gap-3">
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span className="text-[#FBF3EA]/85">{firebaseValidation.message}</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    {dbReport?.overallStatus === 'error' ? (
+                      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                    ) : isVerifiedAdminUser(firebaseUser) || dbReport?.overallStatus === 'connected' ? (
+                      <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <Database className="w-4 h-4 text-[#E2B96F] shrink-0" />
+                    )}
+                    <span className="text-[#FBF3EA]/85">
+                      {dbReport
+                        ? dbReport.summary
+                        : firebaseValidation.message}
+                    </span>
                   </div>
-                  <span className="font-mono text-emerald-300 uppercase shrink-0">Connected</span>
+                  <span
+                    data-testid="firebase-connection-badge"
+                    className={`font-mono uppercase shrink-0 ${
+                      dbReport?.overallStatus === 'error'
+                        ? 'text-rose-300'
+                        : isVerifiedAdminUser(firebaseUser) || dbReport?.overallStatus === 'connected'
+                        ? 'text-emerald-300'
+                        : dbReport?.overallStatus === 'read_only'
+                        ? 'text-amber-300'
+                        : 'text-[#E2B96F]'
+                    }`}
+                  >
+                    {dbReport?.overallStatus === 'error'
+                      ? 'Offline / Error'
+                      : isVerifiedAdminUser(firebaseUser) || dbReport?.overallStatus === 'connected'
+                      ? 'Live Read & Write'
+                      : dbReport?.overallStatus === 'read_only'
+                      ? 'Reachable (Read)'
+                      : 'Not Tested Yet'}
+                  </span>
+                </div>
+
+                {/* Google Admin Authentication & Live Sync Card */}
+                <div className="rounded-xl bg-[#120408] border border-[#E2B96F]/20 p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-0.5 min-w-0">
+                      <p className="text-xs font-semibold text-[#FBF3EA]">
+                        Google Admin Database Sync
+                      </p>
+                      <p className="text-[11px] text-[#FBF3EA]/65 leading-relaxed">
+                        {isVerifiedAdminUser(firebaseUser)
+                          ? `Authenticated as ${firebaseUser?.email}. Orders, projects, and settings automatically sync to Firestore.`
+                          : firebaseUser
+                          ? `Signed in as ${firebaseUser.email}. Sign in with ${FIREBASE_ADMIN_EMAIL} to unlock full Admin Firestore writes.`
+                          : `Firestore rules protect writes behind verified Google Auth (${FIREBASE_ADMIN_EMAIL}). Sign in to enable live database writes & cross-device sync.`}
+                      </p>
+                    </div>
+                    {isVerifiedAdminUser(firebaseUser) && (
+                      <span className="shrink-0 px-2 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-500/30 text-[10px] font-mono text-emerald-300">
+                        Verified Admin
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!isVerifiedAdminUser(firebaseUser) ? (
+                      <button
+                        type="button"
+                        data-testid="admin-google-signin-btn"
+                        onClick={handleGoogleAdminSignIn}
+                        disabled={authBusy}
+                        className="min-h-[40px] px-4 rounded-xl bg-[#FBF3EA] hover:bg-white text-[#16050A] font-semibold text-xs flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-60"
+                      >
+                        <UserCheck className="w-4 h-4" />
+                        <span>{authBusy ? 'Signing In...' : 'Sign In with Google (Admin Sync)'}</span>
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          data-testid="sync-workspace-firestore-btn"
+                          onClick={handleSyncWorkspaceToFirestore}
+                          disabled={syncingWorkspace}
+                          className="min-h-[40px] px-4 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/35 text-emerald-200 font-semibold text-xs flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${syncingWorkspace ? 'animate-spin' : ''}`} />
+                          <span>
+                            {syncingWorkspace ? 'Syncing to Firestore...' : 'Sync All Data to Firestore'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleGoogleAdminSignOut}
+                          disabled={authBusy}
+                          className="min-h-[40px] px-3.5 rounded-xl bg-[#1A060C] hover:bg-[#260912] border border-[#FBF3EA]/15 text-[#FBF3EA]/75 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <LogOut className="w-3.5 h-3.5" />
+                          <span>Sign Out</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
 
                 <div className="divide-y divide-[#FBF3EA]/8 rounded-xl bg-[#120408] border border-[#E2B96F]/15 px-4 text-xs">
@@ -2336,25 +2549,119 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                 </div>
 
                 {firebaseFeedback && (
-                  <div className="rounded-xl bg-emerald-950/60 border border-emerald-500/30 px-3.5 py-2.5 text-xs text-emerald-200">
+                  <div
+                    data-testid="firebase-feedback-banner"
+                    className={`rounded-xl px-3.5 py-2.5 text-xs border ${
+                      firebaseFeedbackTone === 'error'
+                        ? 'bg-rose-950/60 border-rose-500/35 text-rose-200'
+                        : firebaseFeedbackTone === 'warning'
+                        ? 'bg-amber-950/60 border-amber-500/35 text-amber-200'
+                        : 'bg-emerald-950/60 border-emerald-500/30 text-emerald-200'
+                    }`}
+                  >
                     {firebaseFeedback}
                   </div>
                 )}
 
-                <button
-                  type="button"
-                  data-testid="clean-firebase-db-btn"
-                  onClick={handleCleanFirebaseStorage}
-                  disabled={cleaningDb}
-                  className="w-full min-h-[46px] rounded-xl bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  <RefreshCw className={`w-4 h-4 ${cleaningDb ? 'animate-spin' : ''}`} />
-                  <span>
-                    {cleaningDb
-                      ? 'Cleaning Database & Verifying Connection...'
-                      : 'Clean Storage Catalog & Verify Firestore Connection'}
-                  </span>
-                </button>
+                {/* Dedicated Non-Destructive Database Connection Test Button */}
+                <div className="space-y-2.5">
+                  <button
+                    type="button"
+                    data-testid="test-firebase-db-btn"
+                    onClick={handleTestDatabaseConnection}
+                    disabled={testingDb}
+                    className="w-full min-h-[46px] rounded-xl bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-60"
+                  >
+                    <Activity className={`w-4 h-4 ${testingDb ? 'animate-pulse' : ''}`} />
+                    <span>
+                      {testingDb
+                        ? 'Testing Live Firestore Connection...'
+                        : 'Test Database Connection'}
+                    </span>
+                  </button>
+
+                  {/* Live Diagnostic Checklist Output */}
+                  {dbReport && (
+                    <div
+                      data-testid="db-connection-report"
+                      className="rounded-xl bg-[#120408] border border-[#E2B96F]/20 p-3.5 space-y-2.5"
+                    >
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-[#E2B96F]">
+                          Live Diagnostic Checks
+                        </span>
+                        <span className="font-mono tabular-nums text-[#FBF3EA]/55">
+                          {dbReport.totalLatencyMs} ms · {new Date(dbReport.checkedAt).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {dbReport.checks.map((check) => (
+                          <div
+                            key={check.id}
+                            data-testid={`db-check-${check.id}`}
+                            className="rounded-lg bg-[#1A060C] border border-[#FBF3EA]/8 p-2.5 flex items-start gap-2.5"
+                          >
+                            {check.status === 'pass' ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                            ) : check.status === 'warn' ? (
+                              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                            ) : (
+                              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-medium text-[#FBF3EA]">
+                                  {check.label}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-mono uppercase ${
+                                    check.status === 'pass'
+                                      ? 'text-emerald-300'
+                                      : check.status === 'warn'
+                                      ? 'text-amber-300'
+                                      : 'text-rose-300'
+                                  }`}
+                                >
+                                  {check.status === 'pass'
+                                    ? check.latencyMs
+                                      ? `OK · ${check.latencyMs}ms`
+                                      : 'OK'
+                                    : check.status === 'warn'
+                                    ? 'Action Needed'
+                                    : 'Failed'}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-[#FBF3EA]/65 mt-0.5 leading-relaxed">
+                                {check.detail}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Separate Maintenance Action: Clean Uploaded Storage Catalog Only */}
+                <div className="pt-3 border-t border-[#FBF3EA]/10 space-y-2">
+                  <button
+                    type="button"
+                    data-testid="clean-firebase-db-btn"
+                    onClick={handleCleanFirebaseStorage}
+                    disabled={cleaningDb}
+                    className="w-full min-h-[42px] rounded-xl bg-rose-950/40 hover:bg-rose-950/65 border border-rose-500/30 text-rose-200 font-medium text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-60"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>
+                      {cleaningDb
+                        ? 'Cleaning Storage Catalog...'
+                        : 'Clean Storage Catalog (Purge Media Files)'}
+                    </span>
+                  </button>
+                  <p className="text-[11px] text-[#FBF3EA]/50 text-center">
+                    Separate from testing the database — removes uploaded media files from the catalog without erasing Firestore orders or settings.
+                  </p>
+                </div>
               </div>
 
               <div className="lg:col-span-6 rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 p-5 sm:p-6 space-y-5">

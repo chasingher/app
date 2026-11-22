@@ -41,10 +41,17 @@ import {
   SubmissionOrder,
   TestimonialItem,
 } from './utils/supabaseAndOci';
+import type { User } from 'firebase/auth';
 import {
   fetchPlatformSettingsFromFirestore,
   savePlatformSettingsToFirestore,
   saveOrderToFirestore,
+  deleteOrderFromFirestore,
+  saveChasingHerProjectToFirestore,
+  saveMemoriesProjectToFirestore,
+  deleteProjectFromFirestore,
+  subscribeToFirebaseAuth,
+  subscribeToFirestoreWorkspace,
 } from './utils/firebaseClient';
 import { OrderLandingView } from './components/OrderLandingView';
 import { CustomerMySiteView } from './components/CustomerMySiteView';
@@ -118,6 +125,7 @@ export function App() {
     }
   });
   const [justPaidOrderId, setJustPaidOrderId] = useState<string | null>(null);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
 
   const syncBrowserDirectoryUrl = (
     nextView: AppView,
@@ -255,6 +263,46 @@ export function App() {
     };
   }, []);
 
+  // Track Firebase Google Auth state and subscribe to live Firestore collections once authenticated
+  useEffect(() => {
+    return subscribeToFirebaseAuth((user) => {
+      setFirebaseUser(user);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseUser || !firebaseUser.emailVerified) return;
+    return subscribeToFirestoreWorkspace(firebaseUser, {
+      onOrders: (remoteOrders) => {
+        if (remoteOrders.length === 0) return;
+        setOrders((prev) => {
+          const byId = new Map<string, SubmissionOrder>();
+          for (const item of prev) byId.set(item.id, item);
+          for (const item of remoteOrders) byId.set(item.id, item);
+          return Array.from(byId.values()).sort((a, b) =>
+            (b.created_at || '').localeCompare(a.created_at || '')
+          );
+        });
+      },
+      onChasingHerProjects: (remoteMap) => {
+        if (Object.keys(remoteMap).length === 0) return;
+        setChasingHerProjects((prev) => ({ ...prev, ...remoteMap }));
+      },
+      onMemoriesProjects: (remoteMap) => {
+        if (Object.keys(remoteMap).length === 0) return;
+        setMemoriesProjects((prev) => ({ ...prev, ...remoteMap }));
+      },
+      onPlatformSettings: (remoteSettings) => {
+        if (Object.keys(remoteSettings).length === 0) return;
+        setSettingsMap((prev) => ({ ...prev, ...remoteSettings }));
+        if (remoteSettings[SITE_EXPERIENCES_SETTING_KEY]) {
+          const hydrated = mergeSiteExperiences(remoteSettings[SITE_EXPERIENCES_SETTING_KEY]);
+          setSiteExperiences(hydrated);
+        }
+      },
+    });
+  }, [firebaseUser]);
+
   const handleUpdateSiteExperiences = async (next: SiteExperienceShowcaseMap) => {
     const normalized = mergeSiteExperiences(next);
     setSiteExperiences(normalized);
@@ -371,6 +419,7 @@ export function App() {
       ...prev,
       [slug]: data,
     }));
+    void saveChasingHerProjectToFirestore(slug, data).catch(() => {});
   };
 
   const handleSaveMemories = (slug: string, data: MemoriesProjectData) => {
@@ -378,6 +427,7 @@ export function App() {
       ...prev,
       [slug]: data,
     }));
+    void saveMemoriesProjectToFirestore(slug, data).catch(() => {});
   };
 
   const handleDeleteProject = (product: 'chasing-her' | 'memories', slug: string) => {
@@ -394,6 +444,7 @@ export function App() {
         return next;
       });
     }
+    void deleteProjectFromFirestore(product, slug).catch(() => {});
   };
 
   const handleUpdateOrder = (updatedOrder: SubmissionOrder) => {
@@ -405,6 +456,7 @@ export function App() {
 
   const handleDeleteOrder = (orderId: string) => {
     setOrders((prev) => prev.filter((o) => o.id !== orderId));
+    void deleteOrderFromFirestore(orderId).catch(() => {});
   };
 
   const handleAdminCreateOrder = (newOrder: SubmissionOrder) => {
@@ -683,6 +735,7 @@ export function App() {
             testimonials={testimonials}
             onUpdateTestimonials={setTestimonials}
             onNavigateView={(target) => navigateToRoute(target)}
+            firebaseUser={firebaseUser}
             autoUnlock={autoStart}
           />
         )}
