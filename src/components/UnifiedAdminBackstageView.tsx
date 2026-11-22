@@ -302,6 +302,8 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   const [dbReport, setDbReport] = useState<DatabaseConnectionReport | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
   const [syncingWorkspace, setSyncingWorkspace] = useState(false);
+  const [unauthorizedDomain, setUnauthorizedDomain] = useState<string | null>(null);
+  const [copiedAuthDomain, setCopiedAuthDomain] = useState(false);
 
   // Country settings state
   const [localSettings, setLocalSettings] = useState<Record<string, string>>(settingsMap);
@@ -743,6 +745,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   const handleGoogleAdminSignIn = async () => {
     setAuthBusy(true);
     setFirebaseFeedback(null);
+    setUnauthorizedDomain(null);
     try {
       const cred = await signInWithGooglePopup();
       const signedEmail = cred.user?.email || 'Google account';
@@ -757,12 +760,27 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
           : `Signed in as ${signedEmail}. ${report.summary}`
       );
     } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : String(error);
       setFirebaseFeedbackTone('error');
-      setFirebaseFeedback(
-        error instanceof Error
-          ? `Google sign-in was not completed: ${error.message}`
-          : 'Google sign-in could not be completed.'
-      );
+      if (rawMessage.includes('auth/unauthorized-domain')) {
+        const currentHost =
+          typeof window !== 'undefined' && window.location?.hostname
+            ? window.location.hostname
+            : 'this domain';
+        setUnauthorizedDomain(currentHost);
+        setFirebaseFeedback(
+          `Google sign-in blocked because "${currentHost}" is not yet in Firebase Authorized Domains. Copy the domain above and add it in Firebase Console → Authentication → Settings → Authorized domains.`
+        );
+      } else if (rawMessage.includes('auth/popup-blocked')) {
+        setFirebaseFeedback(
+          'Your browser blocked the Google sign-in popup. Please allow popups for this site and click Sign In again.'
+        );
+      } else if (rawMessage.includes('auth/popup-closed-by-user')) {
+        setFirebaseFeedbackTone('warning');
+        setFirebaseFeedback('Google sign-in popup was closed before finishing sign-in.');
+      } else {
+        setFirebaseFeedback(`Google sign-in was not completed: ${rawMessage}`);
+      }
     } finally {
       setAuthBusy(false);
     }
@@ -2509,6 +2527,52 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                       </>
                     )}
                   </div>
+
+                  {unauthorizedDomain && (
+                    <div
+                      data-testid="unauthorized-domain-helper"
+                      className="rounded-xl bg-rose-950/40 border border-rose-500/35 p-3 space-y-2.5 text-[11px]"
+                    >
+                      <p className="text-rose-200 font-medium">
+                        Add this domain to Firebase Authentication → Settings → Authorized domains:
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <code className="px-2.5 py-1.5 rounded-lg bg-[#120408] border border-rose-400/30 text-[#E2B96F] font-mono text-xs break-all">
+                          {unauthorizedDomain}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(unauthorizedDomain).catch(() => {});
+                            setCopiedAuthDomain(true);
+                            setTimeout(() => setCopiedAuthDomain(false), 2000);
+                          }}
+                          className="min-h-[32px] px-3 rounded-lg bg-[#1A060C] hover:bg-[#260912] border border-[#E2B96F]/30 text-[#FBF3EA] text-xs font-medium flex items-center gap-1.5 cursor-pointer"
+                        >
+                          {copiedAuthDomain ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>Copy Domain</span>
+                            </>
+                          )}
+                        </button>
+                        <a
+                          href={`https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="min-h-[32px] px-3 rounded-lg bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] text-xs font-semibold flex items-center gap-1.5"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>Open Firebase Authorized Domains</span>
+                        </a>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="divide-y divide-[#FBF3EA]/8 rounded-xl bg-[#120408] border border-[#E2B96F]/15 px-4 text-xs">
