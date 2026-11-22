@@ -640,6 +640,19 @@ test('Database connection diagnostics accurately distinguish live read/write, re
   });
   assert.equal(failed.overallStatus, 'error');
   assert.ok(failed.summary.includes('Firestore Live Server Read'));
+
+  const staticHostLive = summarizeDatabaseConnectionChecks({
+    databaseId: 'ai-studio-chasingher-f7a61704-2cdd-4e3c-af0b-e387f983103a',
+    totalLatencyMs: 115,
+    isAdminSignedIn: true,
+    checks: [
+      { id: 'firestore_read', label: 'Firestore Live Server Read', status: 'pass', detail: 'OK', latencyMs: 55 },
+      { id: 'security_rules', label: 'Security Rules Enforcement', status: 'pass', detail: 'OK', latencyMs: 30 },
+      { id: 'admin_write', label: 'Admin Auth & Write Sync', status: 'pass', detail: 'OK', latencyMs: 25 },
+      { id: 'storage_api', label: 'Storage Bucket & Upload SDK', status: 'pass', detail: 'Static hosting mode', latencyMs: 5 },
+    ],
+  });
+  assert.equal(staticHostLive.overallStatus, 'connected');
 });
 
 

@@ -86,6 +86,9 @@ import {
   signInWithGooglePopup,
   signOutFirebase,
   syncWorkspaceSnapshotToFirestore,
+  fetchFirebaseStorageCatalog,
+  deleteMediaFromFirebase,
+  deleteCompressedMediaFromFirestore,
   cleanFirebaseStorageCatalog,
 } from '../utils/firebaseClient';
 import { PWAInstallButton } from './PWAInstallPrompt';
@@ -320,9 +323,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
 
   const loadFirebaseState = async () => {
     try {
-      const res = await fetch('/api/firebase/status');
-      if (!res.ok) return;
-      const data: FirebaseStatusPayload = await res.json();
+      const data = await fetchFirebaseStorageCatalog();
       setFirebaseStatus(data);
     } catch {
       // ignore offline
@@ -331,7 +332,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
 
   useEffect(() => {
     loadFirebaseState();
-  }, []);
+  }, [firebaseUser]);
 
   const handleUnlock = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -873,7 +874,16 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   };
 
   const handleDeleteFirebaseMedia = async (id: string) => {
-    await fetch(`/api/firebase/objects/${id}`, { method: 'DELETE' });
+    const target = firebaseStatus?.objects?.find((obj) => obj.id === id);
+    try {
+      await fetch(`/api/firebase/objects/${id}`, { method: 'DELETE' });
+    } catch {
+      // ignore on static host
+    }
+    if (target?.url) {
+      await deleteMediaFromFirebase(target.url).catch(() => {});
+    }
+    await deleteCompressedMediaFromFirestore(id).catch(() => {});
     await loadFirebaseState();
   };
 

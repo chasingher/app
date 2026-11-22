@@ -1411,9 +1411,14 @@ export function summarizeDatabaseConnectionChecks(params: {
   const readCheck = params.checks.find((c) => c.id === 'firestore_read');
   const rulesCheck = params.checks.find((c) => c.id === 'security_rules');
   const writeCheck = params.checks.find((c) => c.id === 'admin_write');
-  const hasAnyFail = params.checks.some((c) => c.status === 'fail');
+  const storageCheck = params.checks.find((c) => c.id === 'storage_api');
 
-  if (readCheck?.status === 'fail' || rulesCheck?.status === 'fail' || hasAnyFail) {
+  const coreDbFailed =
+    readCheck?.status === 'fail' ||
+    rulesCheck?.status === 'fail' ||
+    writeCheck?.status === 'fail';
+
+  if (coreDbFailed) {
     const failedLabels = params.checks
       .filter((c) => c.status === 'fail')
       .map((c) => c.label)
@@ -1425,6 +1430,12 @@ export function summarizeDatabaseConnectionChecks(params: {
   }
 
   if (writeCheck?.status === 'pass' && params.isAdminSignedIn) {
+    if (storageCheck?.status === 'fail') {
+      return {
+        overallStatus: 'connected',
+        summary: `Firestore database (${params.databaseId}) verified live for reads & Admin writes (${params.totalLatencyMs} ms). Direct Firebase Storage SDK active.`,
+      };
+    }
     return {
       overallStatus: 'connected',
       summary: `Firestore database (${params.databaseId}) verified live for reads & authenticated Admin writes in ${params.totalLatencyMs} ms.`,

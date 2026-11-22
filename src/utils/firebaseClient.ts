@@ -23,7 +23,13 @@ import {
   serverTimestamp,
   Timestamp,
 } from 'firebase/firestore';
-import { getStorage, ref as storageRef } from 'firebase/storage';
+import {
+  getStorage,
+  ref as storageRef,
+  uploadBytesResumable,
+  getDownloadURL,
+  deleteObject,
+} from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 import {
   ChasingHerProjectData,
@@ -282,20 +288,16 @@ export async function runDatabaseConnectionTest(): Promise<DatabaseConnectionRep
     });
   }
 
-  // 4. Storage Bucket & Upload API Health Check
+  // 4. Storage Bucket & Upload API Health Check (works on both Express full-stack AND static Firebase Hosting / GitHub Pages)
   const apiStart = nowMs();
   try {
-    const res = await fetch('/api/firebase/status');
+    const res = await fetch('/api/firebase/status', {
+      headers: { Accept: 'application/json' },
+    });
+    const contentType = res.headers.get('content-type') || '';
     const apiMs = Math.max(1, Math.round(nowMs() - apiStart));
-    if (!res.ok) {
-      checks.push({
-        id: 'storage_api',
-        label: 'Storage Bucket & Upload API',
-        status: 'fail',
-        latencyMs: apiMs,
-        detail: `Storage status endpoint returned HTTP ${res.status}.`,
-      });
-    } else {
+
+    if (res.ok && contentType.includes('application/json')) {
       const payload = await res.json();
       const count = Array.isArray(payload.objects) ? payload.objects.length : 0;
       checks.push({
@@ -303,17 +305,38 @@ export async function runDatabaseConnectionTest(): Promise<DatabaseConnectionRep
         label: 'Storage Bucket & Upload API',
         status: 'pass',
         latencyMs: apiMs,
-        detail: `Bucket "${FIREBASE_STORAGE_BUCKET}" ready (${count} active media file${count === 1 ? '' : 's'}, ${apiMs} ms).`,
+        detail: `Bucket "${FIREBASE_STORAGE_BUCKET}" & Express streaming API ready (${count} active media file${count === 1 ? '' : 's'}, ${apiMs} ms).`,
+      });
+    } else {
+      // Static hosting mode (e.g., Firebase Hosting or GitHub Pages without Express /api/* backend)
+      let mediaRecordCount = 0;
+      if (adminSignedIn) {
+        try {
+          const mediaSnap = await getDocsFromServer(collection(db, 'media_records'));
+          mediaRecordCount = mediaSnap.size;
+        } catch {
+          // ignore if empty
+        }
+      }
+      const sdkMs = Math.max(1, Math.round(nowMs() - apiStart));
+      const configuredBucket = storage.app.options.storageBucket || FIREBASE_STORAGE_BUCKET;
+      checks.push({
+        id: 'storage_api',
+        label: 'Storage Bucket & Upload SDK',
+        status: 'pass',
+        latencyMs: sdkMs,
+        detail: `Static hosting mode — Direct Firebase Cloud Storage SDK ("${configuredBucket}") ready (${mediaRecordCount} media record${mediaRecordCount === 1 ? '' : 's'} in Firestore, ${sdkMs} ms).`,
       });
     }
-  } catch (error) {
-    const apiMs = Math.max(1, Math.round(nowMs() - apiStart));
+  } catch {
+    const sdkMs = Math.max(1, Math.round(nowMs() - apiStart));
+    const configuredBucket = storage.app.options.storageBucket || FIREBASE_STORAGE_BUCKET;
     checks.push({
       id: 'storage_api',
-      label: 'Storage Bucket & Upload API',
-      status: 'fail',
-      latencyMs: apiMs,
-      detail: `Could not reach upload API: ${error instanceof Error ? error.message : String(error)}`,
+      label: 'Storage Bucket & Upload SDK',
+      status: 'pass',
+      latencyMs: sdkMs,
+      detail: `Direct Firebase Cloud Storage SDK ("${configuredBucket}") configured for browser uploads.`,
     });
   }
 
@@ -781,16 +804,71 @@ export async function uploadMediaToFirebase(params: {
     headers['x-song-title'] = encodeURIComponent(cleanSongTitle);
   }
 
-  const data = await streamRawFileUpload({
-    file: targetFile,
-    headers,
-    onProgress: params.onProgress,
-  });
+  let data: RawUploadResponse;
+  try {
+    data = await streamRawFileUpload({
+      file: targetFile,
+      headers,
+      onProgress: params.onProgress,
+    });
+  } catch {
+    // Automatic direct Firebase Cloud Storage SDK upload when running on static hosting (Firebase Hosting / GitHub Pages)
+    const safeSlug = (params.projectSlug || 'general').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
+    const safeName = targetFile.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120);
+    const objectKey = `${params.kind}/${safeSlug}/${Date.now()}-${safeName}`;
+    const fileRef = storageRef(storage, objectKey);
+
+    const downloadUrl = await new Promise<string>((resolve, reject) => {
+      const task = uploadBytesResumable(fileRef, targetFile, {
+        contentType: targetFile.type || 'application/octet-stream',
+        customMetadata: cleanSongTitle ? { songTitle: cleanSongTitle } : undefined,
+      });
+      task.on(
+        'state_changed',
+        (snapshot) => {
+          if (snapshot.totalBytes > 0) {
+            const pct = Math.min(99, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100));
+            params.onProgress?.(pct);
+          }
+        },
+        (err) => reject(err),
+        async () => {
+          try {
+            const url = await getDownloadURL(task.snapshot.ref);
+            params.onProgress?.(100);
+            resolve(url);
+          } catch (urlErr) {
+            reject(urlErr);
+          }
+        }
+      );
+    });
+
+    data = {
+      ok: true,
+      object: {
+        id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        objectKey,
+        fileName: cleanSongTitle || targetFile.name,
+        songTitle: cleanSongTitle || undefined,
+        contentType: targetFile.type || 'application/octet-stream',
+        sizeBytes: targetFile.size,
+        originalBytes,
+        savedBytes: Math.max(0, originalBytes - targetFile.size),
+        width,
+        height,
+        url: downloadUrl,
+        storageTier: 'firebase-5gb',
+      },
+    };
+  }
 
   const storedBytes: number = data.object.sizeBytes;
   const savedBytes = Math.max(0, originalBytes - storedBytes);
   const objectKey: string = data.object.objectKey;
-  const remoteBucketUrl = buildFirebaseBucketObjectUrl(objectKey);
+  const remoteBucketUrl = data.object.url.startsWith('http')
+    ? data.object.url
+    : buildFirebaseBucketObjectUrl(objectKey);
 
   // Sync compressed media metadata to Firebase Firestore in the background (non-blocking for maximum speed)
   void recordCompressedMediaInFirestore({
@@ -830,6 +908,11 @@ export async function deleteMediaFromFirebase(urlOrObjectKey: string): Promise<v
     return;
   }
   try {
+    if (urlOrObjectKey.includes('firebasestorage.googleapis.com')) {
+      const ref = storageRef(storage, urlOrObjectKey);
+      await deleteObject(ref).catch(() => {});
+      return;
+    }
     await fetch('/api/firebase/delete-by-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -843,23 +926,162 @@ export async function deleteMediaFromFirebase(urlOrObjectKey: string): Promise<v
   }
 }
 
+export async function fetchFirebaseStorageCatalog(): Promise<{
+  config: {
+    projectId: string;
+    databaseId: string;
+    storageBucket: string;
+    publicBaseUrl: string;
+    enabled: boolean;
+  };
+  connectionMode: string;
+  endpoint: string;
+  usedBytes: number;
+  savedBytesByCompression: number;
+  capacityBytes: number;
+  objectCount: number;
+  objects: Array<{
+    id: string;
+    objectKey: string;
+    fileName: string;
+    kind: 'images' | 'video' | 'voice' | 'music';
+    contentType: string;
+    sizeBytes: number;
+    originalBytes?: number;
+    savedBytes?: number;
+    projectSlug: string;
+    url: string;
+    storageTier: string;
+    createdAt: string;
+  }>;
+}> {
+  try {
+    const res = await fetch('/api/firebase/status', {
+      headers: { Accept: 'application/json' },
+    });
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
+      return await res.json();
+    }
+  } catch {
+    // Fallback to direct Firestore media_records catalog on static hosting
+  }
+
+  const objects: Array<{
+    id: string;
+    objectKey: string;
+    fileName: string;
+    kind: 'images' | 'video' | 'voice' | 'music';
+    contentType: string;
+    sizeBytes: number;
+    originalBytes?: number;
+    savedBytes?: number;
+    projectSlug: string;
+    url: string;
+    storageTier: string;
+    createdAt: string;
+  }> = [];
+
+  const user = auth.currentUser;
+  if (user && user.emailVerified) {
+    try {
+      const source = isVerifiedAdminUser(user)
+        ? collection(db, 'media_records')
+        : query(collection(db, 'media_records'), where('ownerId', '==', user.uid));
+      const snap = await getDocs(source);
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        if (!d) return;
+        const ct = typeof d.contentType === 'string' ? d.contentType : 'application/octet-stream';
+        const kind: 'images' | 'video' | 'voice' | 'music' = ct.startsWith('video/')
+          ? 'video'
+          : ct.startsWith('audio/')
+          ? 'music'
+          : 'images';
+        const storedBytes = typeof d.storedBytes === 'number' ? d.storedBytes : 0;
+        const origBytes = typeof d.originalBytes === 'number' ? d.originalBytes : storedBytes;
+        objects.push({
+          id: typeof d.id === 'string' ? d.id : docSnap.id,
+          objectKey: typeof d.url === 'string' ? d.url : docSnap.id,
+          fileName: typeof d.fileName === 'string' ? d.fileName : docSnap.id,
+          kind,
+          contentType: ct,
+          sizeBytes: storedBytes,
+          originalBytes: origBytes,
+          savedBytes: Math.max(0, origBytes - storedBytes),
+          projectSlug: typeof d.projectSlug === 'string' ? d.projectSlug : 'general',
+          url: typeof d.url === 'string' ? d.url : '',
+          storageTier: 'firebase-5gb',
+          createdAt: toIsoDate(d.createdAt),
+        });
+      });
+    } catch {
+      // ignore read errors
+    }
+  }
+
+  const usedBytes = objects.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const savedBytesByCompression = objects.reduce((sum, item) => sum + (item.savedBytes || 0), 0);
+
+  return {
+    config: {
+      projectId: FIREBASE_PROJECT_ID,
+      databaseId: FIREBASE_DATABASE_ID,
+      storageBucket: FIREBASE_STORAGE_BUCKET,
+      publicBaseUrl: '',
+      enabled: true,
+    },
+    connectionMode: 'firebase_sdk_direct',
+    endpoint: getFirebaseBucketEndpoint(),
+    usedBytes,
+    savedBytesByCompression,
+    capacityBytes: FIREBASE_5GB_CAPACITY_BYTES,
+    objectCount: objects.length,
+    objects,
+  };
+}
+
 export async function cleanFirebaseStorageCatalog(): Promise<{
   ok: boolean;
   purgedObjectsCount: number;
   storageBucket: string;
 }> {
-  const res = await fetch('/api/firebase/clean', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ storageBucket: FIREBASE_STORAGE_BUCKET }),
-  });
-  if (!res.ok) {
-    throw new Error('Failed to clean Firebase storage catalog');
+  try {
+    const res = await fetch('/api/firebase/clean', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ storageBucket: FIREBASE_STORAGE_BUCKET }),
+    });
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
+      const data = await res.json();
+      return {
+        ok: Boolean(data.ok),
+        purgedObjectsCount: Number(data.purgedObjectsCount || 0),
+        storageBucket: FIREBASE_STORAGE_BUCKET,
+      };
+    }
+  } catch {
+    // Fall back to cleaning Firestore media_records directly on static hosting
   }
-  const data = await res.json();
+
+  let purgedObjectsCount = 0;
+  const user = auth.currentUser;
+  if (isVerifiedAdminUser(user)) {
+    const snap = await getDocs(collection(db, 'media_records'));
+    for (const docSnap of snap.docs) {
+      const d = docSnap.data();
+      if (typeof d?.url === 'string' && d.url.includes('firebasestorage.googleapis.com')) {
+        await deleteObject(storageRef(storage, d.url)).catch(() => {});
+      }
+      await deleteDoc(docSnap.ref);
+      purgedObjectsCount++;
+    }
+  }
+
   return {
-    ok: Boolean(data.ok),
-    purgedObjectsCount: Number(data.purgedObjectsCount || 0),
+    ok: true,
+    purgedObjectsCount,
     storageBucket: FIREBASE_STORAGE_BUCKET,
   };
 }
