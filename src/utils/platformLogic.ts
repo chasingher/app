@@ -883,8 +883,10 @@ export interface ChasingHerProjectData {
   flower_images: string[];
   songs: Array<{ title: string; artist: string; spotify_url?: string; duration?: string; explicit?: boolean }>;
   music_url?: string;
+  music_title?: string;
   music_start?: number;
   music_end?: number | null;
+  is_public_showcase?: boolean;
   media_meta?: Record<string, ProjectMediaMeta>;
 }
 
@@ -914,9 +916,11 @@ export interface MemoriesProjectData {
   }>;
   flower_images: string[];
   music_url?: string;
+  music_title?: string;
   music_start?: number;
   music_end?: number | null;
   voice_url?: string;
+  is_public_showcase?: boolean;
   media_meta?: Record<string, ProjectMediaMeta>;
 }
 
@@ -1054,7 +1058,7 @@ export function computeProjectStorageUsage(
       'music',
       'music',
       'music-track',
-      'Background Soundtrack Audio'
+      project.music_title?.trim() || 'Background Soundtrack Audio'
     );
   }
 
@@ -1296,4 +1300,78 @@ export function computeMemoriesProgress(project: MemoriesProjectData): {
     items,
   };
 }
+
+export const PUBLIC_SHOWCASE_SLUGS = {
+  'chasing-her': 'ama-and-kofi',
+  memories: 'wanjiku-and-brian',
+} as const;
+
+export function deriveCleanAudioTitle(fileName: string, customTitle?: string): string {
+  const manual = (customTitle || '').trim();
+  if (manual) {
+    return manual.slice(0, 120);
+  }
+  const base = (fileName || '')
+    .replace(/^.*[\\/]/, '')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (base || 'Custom Soundtrack').slice(0, 120);
+}
+
+export function isPublicShowcaseProject(
+  slug?: string | null,
+  project?: { is_public_showcase?: boolean } | null
+): boolean {
+  if (!slug || !slug.trim()) return false;
+  if (project && typeof project.is_public_showcase === 'boolean') {
+    return project.is_public_showcase === true;
+  }
+  const clean = slug.trim().toLowerCase();
+  return (
+    clean === PUBLIC_SHOWCASE_SLUGS['chasing-her'] ||
+    clean === PUBLIC_SHOWCASE_SLUGS.memories
+  );
+}
+
+export function canCustomerAccessProjectSlug(params: {
+  slug?: string | null;
+  viewerEmail?: string | null;
+  justPaidOrderId?: string | null;
+  orders: Array<{ id: string; slug: string; email: string }>;
+  isAdmin?: boolean;
+}): boolean {
+  if (params.isAdmin) return true;
+  const cleanSlug = (params.slug || '').trim().toLowerCase();
+  if (!cleanSlug) return false;
+
+  if (params.justPaidOrderId) {
+    const paidOrder = params.orders.find((o) => o.id === params.justPaidOrderId);
+    if (paidOrder && paidOrder.slug.trim().toLowerCase() === cleanSlug) {
+      return true;
+    }
+  }
+
+  const cleanEmail = (params.viewerEmail || '').trim().toLowerCase();
+  if (!cleanEmail) return false;
+
+  return params.orders.some(
+    (o) =>
+      o.slug.trim().toLowerCase() === cleanSlug &&
+      o.email.trim().toLowerCase() === cleanEmail
+  );
+}
+
+export function canBypassPreviewPin(params: {
+  isAdmin?: boolean;
+  isBuilderPreview?: boolean;
+  isPublicShowcase?: boolean;
+  autoStart?: boolean;
+}): boolean {
+  if (params.isAdmin || params.isBuilderPreview) return true;
+  if (params.isPublicShowcase && params.autoStart) return true;
+  return false;
+}
+
 

@@ -183,12 +183,80 @@ export async function deleteCompressedMediaFromFirestore(recordId: string): Prom
   }
 }
 
-function fileToBase64DataUrl(file: File): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error('File read error'));
-    reader.readAsDataURL(file);
+interface RawUploadResponse {
+  ok: boolean;
+  object: {
+    id: string;
+    objectKey: string;
+    fileName: string;
+    songTitle?: string;
+    contentType: string;
+    sizeBytes: number;
+    originalBytes?: number;
+    savedBytes?: number;
+    width?: number;
+    height?: number;
+    url: string;
+    storageTier: string;
+  };
+}
+
+function streamRawFileUpload(params: {
+  file: File;
+  headers: Record<string, string>;
+  onProgress?: (percent: number) => void;
+}): Promise<RawUploadResponse> {
+  if (typeof XMLHttpRequest === 'undefined') {
+    return fetch('/api/firebase/upload-raw', {
+      method: 'POST',
+      headers: params.headers,
+      body: params.file,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || 'Firebase media upload failed');
+      }
+      params.onProgress?.(100);
+      return res.json() as Promise<RawUploadResponse>;
+    });
+  }
+
+  return new Promise<RawUploadResponse>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/firebase/upload-raw', true);
+    for (const [key, val] of Object.entries(params.headers)) {
+      xhr.setRequestHeader(key, val);
+    }
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && ev.total > 0) {
+        const pct = Math.min(99, Math.round((ev.loaded / ev.total) * 100));
+        params.onProgress?.(pct);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const parsed = JSON.parse(xhr.responseText) as RawUploadResponse;
+          params.onProgress?.(100);
+          resolve(parsed);
+        } catch {
+          reject(new Error('Invalid upload response from server'));
+        }
+      } else {
+        try {
+          const errBody = JSON.parse(xhr.responseText);
+          reject(new Error(errBody.error || `Upload failed (${xhr.status})`));
+        } catch {
+          reject(new Error(`Upload failed (${xhr.status})`));
+        }
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error while uploading media'));
+    xhr.onabort = () => reject(new Error('Upload was cancelled'));
+    xhr.send(params.file);
   });
 }
 
@@ -196,12 +264,14 @@ export async function uploadMediaToFirebase(params: {
   file: File;
   kind: 'images' | 'video' | 'voice' | 'music';
   projectSlug: string;
+  songTitle?: string;
   alreadyCompressed?: boolean;
   originalBytes?: number;
   width?: number;
   height?: number;
   forcePreserveTransparency?: boolean;
   onStatus?: (msg: string) => void;
+  onProgress?: (percent: number) => void;
 }): Promise<{
   url: string;
   remoteBucketUrl: string;
@@ -214,6 +284,7 @@ export async function uploadMediaToFirebase(params: {
   height: number;
   contentType: string;
   objectKey: string;
+  songTitle?: string;
 }> {
   let targetFile = params.file;
   let originalBytes = params.originalBytes ?? params.file.size;
@@ -237,49 +308,48 @@ export async function uploadMediaToFirebase(params: {
   }
 
   params.onStatus?.('Uploading…');
-  const base64Data = await fileToBase64DataUrl(targetFile);
+  params.onProgress?.(5);
 
-  const res = await fetch('/api/firebase/upload', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      fileName: targetFile.name,
-      contentType: targetFile.type || 'application/octet-stream',
-      kind: params.kind,
-      projectSlug: params.projectSlug || 'general',
-      storageBucket: FIREBASE_STORAGE_BUCKET,
-      originalBytes,
-      width,
-      height,
-      base64Data,
-    }),
+  const cleanSongTitle = (params.songTitle || '').trim().slice(0, 120);
+  const headers: Record<string, string> = {
+    'Content-Type': targetFile.type || 'application/octet-stream',
+    'x-file-name': encodeURIComponent(targetFile.name),
+    'x-content-type': encodeURIComponent(targetFile.type || 'application/octet-stream'),
+    'x-kind': encodeURIComponent(params.kind),
+    'x-project-slug': encodeURIComponent(params.projectSlug || 'general'),
+    'x-original-bytes': String(Math.round(originalBytes)),
+    'x-width': String(Math.round(width)),
+    'x-height': String(Math.round(height)),
+  };
+  if (cleanSongTitle) {
+    headers['x-song-title'] = encodeURIComponent(cleanSongTitle);
+  }
+
+  const data = await streamRawFileUpload({
+    file: targetFile,
+    headers,
+    onProgress: params.onProgress,
   });
 
-  if (!res.ok) {
-    throw new Error('Firebase media upload failed');
-  }
-  const data = await res.json();
   const storedBytes: number = data.object.sizeBytes;
   const savedBytes = Math.max(0, originalBytes - storedBytes);
   const objectKey: string = data.object.objectKey;
   const remoteBucketUrl = buildFirebaseBucketObjectUrl(objectKey);
 
-  // Sync compressed media metadata to Firebase Firestore when user is authenticated
-  try {
-    await recordCompressedMediaInFirestore({
-      id: data.object.id || `media-${Date.now()}`,
-      projectSlug: params.projectSlug || 'general',
-      fileName: targetFile.name,
-      contentType: targetFile.type || 'image/webp',
-      originalBytes,
-      storedBytes,
-      width,
-      height,
-      url: data.object.url,
-    });
-  } catch {
+  // Sync compressed media metadata to Firebase Firestore in the background (non-blocking for maximum speed)
+  void recordCompressedMediaInFirestore({
+    id: data.object.id || `media-${Date.now()}`,
+    projectSlug: params.projectSlug || 'general',
+    fileName: cleanSongTitle || targetFile.name,
+    contentType: targetFile.type || 'application/octet-stream',
+    originalBytes,
+    storedBytes,
+    width,
+    height,
+    url: data.object.url,
+  }).catch(() => {
     // Non-blocking if user is not signed in with Firebase Auth
-  }
+  });
 
   params.onStatus?.('Upload complete.');
 
@@ -293,8 +363,9 @@ export async function uploadMediaToFirebase(params: {
     savedBytes,
     width,
     height,
-    contentType: targetFile.type || data.object.contentType || 'image/webp',
+    contentType: targetFile.type || data.object.contentType || 'application/octet-stream',
     objectKey,
+    songTitle: data.object.songTitle || cleanSongTitle || undefined,
   };
 }
 

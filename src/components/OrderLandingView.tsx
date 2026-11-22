@@ -1208,6 +1208,7 @@ export const OrderLandingView: React.FC<OrderLandingViewProps> = ({
                 product={livePreviewModal}
                 chasingHerData={chasingHerDemo}
                 memoriesData={memoriesDemo}
+                isPublicShowcase={true}
               />
             </div>
 

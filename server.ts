@@ -120,6 +120,7 @@ interface FirebaseMediaRecord {
   id: string;
   objectKey: string;
   fileName: string;
+  songTitle?: string;
   kind: 'images' | 'video' | 'voice' | 'music';
   contentType: string;
   sizeBytes: number;
@@ -135,6 +136,27 @@ interface FirebaseMediaRecord {
 
 const FIREBASE_APPLET_CONFIG_PATH = path.resolve(__dirname, 'firebase-applet-config.json');
 const FIREBASE_UPLOAD_DIR = path.resolve(__dirname, 'public/uploads/firebase');
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB limit
+
+function resolveSafeUploadPath(objectKey: string): string {
+  const cleanRel = String(objectKey || '').replace(/^[/\\]+/, '');
+  const resolved = path.resolve(FIREBASE_UPLOAD_DIR, cleanRel);
+  const allowedPrefix = `${FIREBASE_UPLOAD_DIR}${path.sep}`;
+  if (!resolved.startsWith(allowedPrefix)) {
+    throw new Error('Invalid media path');
+  }
+  return resolved;
+}
+
+function decodeHeaderValue(raw: string | string[] | undefined, fallback = ''): string {
+  const str = Array.isArray(raw) ? raw[0] : raw;
+  if (!str) return fallback;
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    return str;
+  }
+}
 
 function loadFirebaseConfig(): StoredFirebaseConfig {
   let appletCfg: { projectId?: string; firestoreDatabaseId?: string; storageBucket?: string } = {};
@@ -169,6 +191,151 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // High-speed raw binary streaming upload (zero Base64 bloat, zero JSON parse overhead)
+  app.post('/api/firebase/upload-raw', async (req, res) => {
+    try {
+      const contentLengthHeader = Number(req.headers['content-length'] || 0);
+      if (Number.isFinite(contentLengthHeader) && contentLengthHeader > MAX_UPLOAD_BYTES) {
+        res.status(413).json({ error: 'File exceeds the 50 MB maximum upload size.' });
+        return;
+      }
+
+      const rawFileName = decodeHeaderValue(req.headers['x-file-name'], 'upload.bin');
+      const rawKind = decodeHeaderValue(req.headers['x-kind'], 'images');
+      const rawSlug = decodeHeaderValue(req.headers['x-project-slug'], 'general');
+      const rawSongTitle = decodeHeaderValue(req.headers['x-song-title'], '').trim().slice(0, 120);
+      const contentType =
+        decodeHeaderValue(req.headers['x-content-type']) ||
+        (typeof req.headers['content-type'] === 'string'
+          ? req.headers['content-type'].split(';')[0].trim()
+          : 'application/octet-stream');
+
+      const originalBytesHeader = Number(req.headers['x-original-bytes'] || 0);
+      const widthHeader = Number(req.headers['x-width'] || 0);
+      const heightHeader = Number(req.headers['x-height'] || 0);
+
+      const safeSlug = rawSlug.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120) || 'general';
+      const safeKind = ['images', 'video', 'voice', 'music'].includes(rawKind)
+        ? (rawKind as FirebaseMediaRecord['kind'])
+        : 'images';
+      const safeName =
+        rawFileName.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^\.+/, '').slice(0, 160) ||
+        `media-${Date.now()}.bin`;
+      const stamp = Date.now().toString(36);
+      const objectKey = `projects/${safeSlug}/${safeKind}/${stamp}-${safeName}`;
+      const localFilePath = resolveSafeUploadPath(objectKey);
+
+      await fs.promises.mkdir(path.dirname(localFilePath), { recursive: true });
+
+      const writeStream = fs.createWriteStream(localFilePath);
+      let receivedBytes = 0;
+      let abortedForSize = false;
+      let finished = false;
+
+      const cleanupPartial = () => {
+        fs.promises.unlink(localFilePath).catch(() => {});
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        req.on('data', (chunk: Buffer) => {
+          receivedBytes += chunk.length;
+          if (receivedBytes > MAX_UPLOAD_BYTES) {
+            abortedForSize = true;
+            req.unpipe(writeStream);
+            writeStream.destroy();
+            cleanupPartial();
+            if (!finished) {
+              finished = true;
+              reject(new Error('FILE_TOO_LARGE'));
+            }
+          }
+        });
+
+        req.on('aborted', () => {
+          writeStream.destroy();
+          cleanupPartial();
+          if (!finished) {
+            finished = true;
+            reject(new Error('UPLOAD_ABORTED'));
+          }
+        });
+
+        req.on('error', (err) => {
+          writeStream.destroy();
+          cleanupPartial();
+          if (!finished) {
+            finished = true;
+            reject(err);
+          }
+        });
+
+        writeStream.on('error', (err) => {
+          cleanupPartial();
+          if (!finished) {
+            finished = true;
+            reject(err);
+          }
+        });
+
+        writeStream.on('finish', () => {
+          if (!finished && !abortedForSize) {
+            finished = true;
+            resolve();
+          }
+        });
+
+        req.pipe(writeStream);
+      });
+
+      if (receivedBytes === 0) {
+        cleanupPartial();
+        res.status(400).json({ error: 'Empty upload stream.' });
+        return;
+      }
+
+      const finalUrl = `/uploads/firebase/${objectKey}`;
+      const rawOriginal =
+        Number.isFinite(originalBytesHeader) && originalBytesHeader >= receivedBytes
+          ? originalBytesHeader
+          : receivedBytes;
+
+      const record: FirebaseMediaRecord = {
+        id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        objectKey,
+        fileName: rawSongTitle || safeName,
+        ...(rawSongTitle ? { songTitle: rawSongTitle } : {}),
+        kind: safeKind,
+        contentType: contentType || 'application/octet-stream',
+        sizeBytes: receivedBytes,
+        originalBytes: rawOriginal,
+        savedBytes: Math.max(0, rawOriginal - receivedBytes),
+        width: Number.isFinite(widthHeader) && widthHeader > 0 ? widthHeader : undefined,
+        height: Number.isFinite(heightHeader) && heightHeader > 0 ? heightHeader : undefined,
+        projectSlug: safeSlug,
+        url: finalUrl,
+        storageTier: 'firebase-5gb',
+        createdAt: new Date().toISOString(),
+      };
+      mediaCatalog.unshift(record);
+
+      res.json({ ok: true, object: record });
+    } catch (err) {
+      if (err instanceof Error && err.message === 'FILE_TOO_LARGE') {
+        res.status(413).json({ error: 'File exceeds the 50 MB maximum upload size.' });
+        return;
+      }
+      if (err instanceof Error && err.message === 'UPLOAD_ABORTED') {
+        if (!res.headersSent) res.status(499).json({ error: 'Upload cancelled.' });
+        return;
+      }
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'Failed to upload media to Firebase storage',
+        });
+      }
+    }
+  });
+
   app.use(express.json({ limit: '50mb' }));
 
   // 1. Firebase 5GB Free Plan Storage & Firestore Database Status
@@ -199,40 +366,63 @@ async function startServer() {
 
   // 2. Clean / Reset Media Catalog & Temp Files
   app.post('/api/firebase/clean', (_req, res) => {
+    const purgedObjectsCount = mediaCatalog.length;
     for (const item of mediaCatalog) {
       try {
-        const localFilePath = path.join(FIREBASE_UPLOAD_DIR, item.objectKey);
+        const localFilePath = resolveSafeUploadPath(item.objectKey);
         if (fs.existsSync(localFilePath)) fs.unlinkSync(localFilePath);
       } catch {
         // ignore
       }
     }
     mediaCatalog.length = 0;
-    res.json({ ok: true, cleaned: true, objectCount: 0, usedBytes: 0 });
+    res.json({ ok: true, cleaned: true, purgedObjectsCount, objectCount: 0, usedBytes: 0 });
   });
 
-  // 3. Firebase Media Upload (Auto-Compressed WebP Images, Video, Voice Notes, Music)
+  // 3. Firebase Media Upload (Legacy Base64 JSON fallback, upgraded to async disk write + path confinement)
   app.post('/api/firebase/upload', async (req, res) => {
     try {
-      const { fileName, contentType, kind, projectSlug, originalBytes, width, height, base64Data } =
-        req.body || {};
+      const {
+        fileName,
+        songTitle,
+        contentType,
+        kind,
+        projectSlug,
+        originalBytes,
+        width,
+        height,
+        base64Data,
+      } = req.body || {};
       if (!fileName || !base64Data) {
         res.status(400).json({ error: 'Missing fileName or base64Data' });
         return;
       }
 
-      const safeSlug = (projectSlug || 'general').replace(/[^a-zA-Z0-9_-]/g, '-');
+      const safeSlug = String(projectSlug || 'general')
+        .replace(/[^a-zA-Z0-9_-]/g, '-')
+        .slice(0, 120) || 'general';
       const safeKind = ['images', 'video', 'voice', 'music'].includes(kind) ? kind : 'images';
-      const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '-');
+      const safeName =
+        String(fileName)
+          .replace(/[^a-zA-Z0-9._-]/g, '-')
+          .replace(/^\.+/, '')
+          .slice(0, 160) || `media-${Date.now()}.bin`;
+      const cleanSongTitle = typeof songTitle === 'string' ? songTitle.trim().slice(0, 120) : '';
       const stamp = Date.now().toString(36);
       const objectKey = `projects/${safeSlug}/${safeKind}/${stamp}-${safeName}`;
 
-      const cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+      const cleanBase64 = String(base64Data).includes(',')
+        ? String(base64Data).split(',')[1]
+        : String(base64Data);
       const buffer = Buffer.from(cleanBase64, 'base64');
+      if (buffer.length > MAX_UPLOAD_BYTES) {
+        res.status(413).json({ error: 'File exceeds the 50 MB maximum upload size.' });
+        return;
+      }
 
-      const localFilePath = path.join(FIREBASE_UPLOAD_DIR, objectKey);
-      fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
-      fs.writeFileSync(localFilePath, buffer);
+      const localFilePath = resolveSafeUploadPath(objectKey);
+      await fs.promises.mkdir(path.dirname(localFilePath), { recursive: true });
+      await fs.promises.writeFile(localFilePath, buffer);
       const finalUrl = `/uploads/firebase/${objectKey}`;
 
       const rawOriginal =
@@ -243,7 +433,8 @@ async function startServer() {
       const record: FirebaseMediaRecord = {
         id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         objectKey,
-        fileName: safeName,
+        fileName: cleanSongTitle || safeName,
+        ...(cleanSongTitle ? { songTitle: cleanSongTitle } : {}),
         kind: safeKind as FirebaseMediaRecord['kind'],
         contentType: contentType || 'application/octet-stream',
         sizeBytes: buffer.length,
@@ -272,7 +463,7 @@ async function startServer() {
       const removed = mediaCatalog[idx];
       mediaCatalog.splice(idx, 1);
       try {
-        const localFilePath = path.join(FIREBASE_UPLOAD_DIR, removed.objectKey);
+        const localFilePath = resolveSafeUploadPath(removed.objectKey);
         if (fs.existsSync(localFilePath)) fs.unlinkSync(localFilePath);
       } catch {
         // ignore
@@ -294,7 +485,7 @@ async function startServer() {
       const removed = mediaCatalog[idx];
       mediaCatalog.splice(idx, 1);
       try {
-        const localFilePath = path.join(FIREBASE_UPLOAD_DIR, removed.objectKey);
+        const localFilePath = resolveSafeUploadPath(removed.objectKey);
         if (fs.existsSync(localFilePath)) fs.unlinkSync(localFilePath);
       } catch {
         // ignore

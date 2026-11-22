@@ -34,6 +34,8 @@ import {
   UserCheck,
   Copy,
   Check,
+  Edit3,
+  X,
 } from 'lucide-react';
 import {
   COUNTRIES,
@@ -59,6 +61,7 @@ import {
   SiteExperienceShowcaseMap,
   SiteExperienceKey,
   DEFAULT_SITE_EXPERIENCES,
+  deriveCleanAudioTitle,
 } from '../utils/platformLogic';
 import {
   SubmissionOrder,
@@ -256,6 +259,12 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   const [newTrackTitle, setNewTrackTitle] = useState('');
   const [newTrackArtist, setNewTrackArtist] = useState('');
   const [newTrackUrl, setNewTrackUrl] = useState('');
+  const [pendingAudioFile, setPendingAudioFile] = useState<File | null>(null);
+  const [audioUploadProgress, setAudioUploadProgress] = useState<number | null>(null);
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
+  const [editingTrackTitle, setEditingTrackTitle] = useState('');
+  const [editingTrackArtist, setEditingTrackArtist] = useState('');
 
   // Testimonials draft state
   const [newTestimonial, setNewTestimonial] = useState<Omit<TestimonialItem, 'id'>>({
@@ -586,7 +595,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
         setAssetStatusMsg('Added new flower overlay to Global Pool.');
       } else if (purpose === 'music') {
         setNewTrackUrl(uploaded.url);
-        if (!newTrackTitle) setNewTrackTitle(file.name.replace(/\.[^.]+$/, ''));
+        if (!newTrackTitle) setNewTrackTitle(deriveCleanAudioTitle(file.name));
         setAssetStatusMsg('Audio uploaded. Click Add Track to publish to Music Library.');
       } else if (purpose === 'showcase-ch') {
         onUpdateShowcaseMedia({
@@ -621,6 +630,70 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
       setAssetStatusMsg('Upload failed — please try again.');
     }
     e.target.value = '';
+    setTimeout(() => setAssetStatusMsg(null), 3500);
+  };
+
+  const handleSelectAdminAudioFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPendingAudioFile(file);
+    setNewTrackTitle((prev) => (prev.trim() ? prev : deriveCleanAudioTitle(file.name)));
+    setAssetStatusMsg(
+      `Ready to upload "${file.name}" (${formatStorageCompact(file.size)}). Name your song below and click Upload & Add Song.`
+    );
+    e.target.value = '';
+  };
+
+  const handleUploadAndAddTrack = async () => {
+    const finalTitle = pendingAudioFile
+      ? deriveCleanAudioTitle(pendingAudioFile.name, newTrackTitle)
+      : newTrackTitle.trim();
+    if (!finalTitle) return;
+
+    let finalUrl = newTrackUrl.trim();
+    if (pendingAudioFile) {
+      setIsUploadingAudio(true);
+      setAudioUploadProgress(5);
+      setAssetStatusMsg(`Streaming "${finalTitle}" to cloud storage…`);
+      try {
+        const uploaded = await uploadMediaToFirebase({
+          file: pendingAudioFile,
+          kind: 'music',
+          projectSlug: 'global-assets',
+          songTitle: finalTitle,
+          onProgress: (pct) => setAudioUploadProgress(pct),
+        });
+        finalUrl = uploaded.url;
+        void loadFirebaseState();
+      } catch (err) {
+        setAssetStatusMsg(
+          err instanceof Error ? err.message : 'Audio upload failed — please try again.'
+        );
+        setIsUploadingAudio(false);
+        setAudioUploadProgress(null);
+        return;
+      } finally {
+        setIsUploadingAudio(false);
+      }
+    }
+
+    onUpdateMusicLibrary([
+      ...musicLibrary,
+      {
+        id: `mus-${Date.now()}`,
+        title: finalTitle,
+        artist: newTrackArtist.trim() || 'Chasing Her Studio',
+        file_url: finalUrl,
+        display_order: musicLibrary.length + 1,
+        is_active: true,
+      },
+    ]);
+    setPendingAudioFile(null);
+    setAudioUploadProgress(null);
+    setNewTrackTitle('');
+    setNewTrackArtist('');
+    setNewTrackUrl('');
+    setAssetStatusMsg(`Saved "${finalTitle}" to the Shared Music Library.`);
     setTimeout(() => setAssetStatusMsg(null), 3500);
   };
 
@@ -1760,123 +1833,239 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                 </div>
               </div>
 
-              {/* 3B: Shared Music Library */}
+              {/* 3B: Shared Music Library (Fast Binary Upload + Song Naming) */}
               <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 p-5 sm:p-6 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs text-[#E2B96F] font-medium">Soundtracks For Builders</p>
+                    <p className="text-xs text-[#E2B96F] font-medium">
+                      Soundtracks For Builders · High-Speed Direct Audio Upload
+                    </p>
                     <h2 className="font-serif text-2xl text-[#FBF3EA] mt-0.5">
                       Shared Music Library ({musicLibrary.length} tracks)
                     </h2>
                   </div>
-                  <label className="min-h-[42px] px-4 rounded-xl bg-[#120408] border border-[#E2B96F]/35 text-[#E2B96F] text-xs font-semibold flex items-center gap-2 cursor-pointer">
+                  <label className="min-h-[42px] px-4 rounded-xl bg-[#120408] border border-[#E2B96F]/35 hover:border-[#E2B96F] text-[#E2B96F] text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors whitespace-nowrap">
                     <Upload className="w-4 h-4" />
-                    <span>Upload MP3/Audio</span>
+                    <span>{pendingAudioFile ? 'Change Audio File' : 'Select MP3 / Audio'}</span>
                     <input
+                      data-testid="admin-audio-file-input"
                       type="file"
                       accept="audio/*"
-                      onChange={(e) => handleUploadAssetToFirebase(e, 'music')}
+                      onChange={handleSelectAdminAudioFile}
                       className="hidden"
                     />
                   </label>
                 </div>
 
+                {pendingAudioFile && (
+                  <div className="rounded-xl bg-[#120408] border border-[#E2B96F]/35 p-3.5 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <Music className="w-4 h-4 text-[#E2B96F] shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-[#FBF3EA] truncate">
+                            Selected file: {pendingAudioFile.name}
+                          </p>
+                          <p className="text-[11px] text-[#FBF3EA]/55 font-mono tabular-nums">
+                            {formatStorageCompact(pendingAudioFile.size)} · Ready to name &amp; stream
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isUploadingAudio}
+                        onClick={() => {
+                          setPendingAudioFile(null);
+                          setAudioUploadProgress(null);
+                        }}
+                        className="min-h-[30px] px-2.5 rounded-lg border border-white/15 text-[11px] text-[#FBF3EA]/70 hover:text-white inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <X className="w-3 h-3" />
+                        <span>Cancel</span>
+                      </button>
+                    </div>
+
+                    {audioUploadProgress !== null && (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[11px] text-[#E2B96F] font-mono tabular-nums">
+                          <span>Uploading audio…</span>
+                          <span>{audioUploadProgress}%</span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-full bg-[#260A13] overflow-hidden">
+                          <div
+                            className="h-full bg-[#E2B96F] transition-all duration-150"
+                            style={{ width: `${audioUploadProgress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
                   <input
+                    data-testid="admin-audio-song-name-input"
                     type="text"
                     value={newTrackTitle}
                     onChange={(e) => setNewTrackTitle(e.target.value)}
-                    placeholder="Track title (e.g. Our Forever Piano)"
-                    className="sm:col-span-4 min-h-[42px] px-3.5 rounded-xl bg-[#120408] border border-[#E2B96F]/20 text-xs text-[#FBF3EA]"
+                    placeholder="Song name (e.g. Our Midnight Piano)"
+                    className="sm:col-span-4 min-h-[42px] px-3.5 rounded-xl bg-[#120408] border border-[#E2B96F]/30 text-xs text-[#FBF3EA] focus:outline-none focus:border-[#E2B96F]"
                   />
                   <input
+                    data-testid="admin-audio-artist-input"
                     type="text"
                     value={newTrackArtist}
                     onChange={(e) => setNewTrackArtist(e.target.value)}
-                    placeholder="Artist / Mood"
-                    className="sm:col-span-3 min-h-[42px] px-3.5 rounded-xl bg-[#120408] border border-[#E2B96F]/20 text-xs text-[#FBF3EA]"
+                    placeholder="Artist / Mood (optional)"
+                    className="sm:col-span-3 min-h-[42px] px-3.5 rounded-xl bg-[#120408] border border-[#E2B96F]/20 text-xs text-[#FBF3EA] focus:outline-none focus:border-[#E2B96F]"
                   />
                   <input
                     type="text"
-                    value={newTrackUrl}
-                    onChange={(e) => setNewTrackUrl(e.target.value)}
-                    placeholder="Audio URL (or upload MP3 above)"
-                    className="sm:col-span-3 min-h-[42px] px-3.5 rounded-xl bg-[#120408] border border-[#E2B96F]/20 text-xs font-mono text-[#FBF3EA]"
+                    value={pendingAudioFile ? `File: ${pendingAudioFile.name}` : newTrackUrl}
+                    onChange={(e) => {
+                      if (!pendingAudioFile) setNewTrackUrl(e.target.value);
+                    }}
+                    readOnly={Boolean(pendingAudioFile)}
+                    placeholder="Direct audio URL (or select file above)"
+                    className="sm:col-span-3 min-h-[42px] px-3.5 rounded-xl bg-[#120408] border border-[#E2B96F]/20 text-xs font-mono text-[#FBF3EA]/85"
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      if (!newTrackTitle.trim()) return;
-                      onUpdateMusicLibrary([
-                        ...musicLibrary,
-                        {
-                          id: `mus-${Date.now()}`,
-                          title: newTrackTitle.trim(),
-                          artist: newTrackArtist.trim() || 'Chasing Her Studio',
-                          file_url: newTrackUrl.trim(),
-                          display_order: musicLibrary.length + 1,
-                          is_active: true,
-                        },
-                      ]);
-                      setNewTrackTitle('');
-                      setNewTrackArtist('');
-                      setNewTrackUrl('');
-                    }}
-                    className="sm:col-span-2 min-h-[42px] rounded-xl bg-[#E2B96F] text-[#16050A] font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    data-testid="admin-audio-upload-submit-btn"
+                    disabled={isUploadingAudio || (!newTrackTitle.trim() && !pendingAudioFile)}
+                    onClick={handleUploadAndAddTrack}
+                    className="sm:col-span-2 min-h-[42px] px-3 rounded-xl bg-[#E2B96F] hover:bg-[#edd18f] disabled:opacity-50 text-[#16050A] font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
                   >
-                    <Plus className="w-4 h-4" />
-                    <span>Add Track</span>
+                    <Plus className="w-4 h-4 shrink-0" />
+                    <span>
+                      {isUploadingAudio
+                        ? `${audioUploadProgress ?? 0}%`
+                        : pendingAudioFile
+                        ? 'Upload & Add'
+                        : 'Add Track'}
+                    </span>
                   </button>
                 </div>
 
                 <div className="divide-y divide-[#FBF3EA]/10 border-t border-[#FBF3EA]/10">
-                  {musicLibrary.map((track) => (
-                    <div
-                      key={track.id}
-                      className="py-3 flex flex-wrap items-center justify-between gap-3"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="h-9 w-9 rounded-lg bg-[#E2B96F]/12 text-[#E2B96F] flex items-center justify-center shrink-0">
-                          <Music className="w-4 h-4" />
+                  {musicLibrary.map((track) => {
+                    const isEditing = editingTrackId === track.id;
+                    return (
+                      <div
+                        key={track.id}
+                        className="py-3 flex flex-wrap items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="h-9 w-9 rounded-lg bg-[#E2B96F]/12 text-[#E2B96F] flex items-center justify-center shrink-0">
+                            <Music className="w-4 h-4" />
+                          </div>
+                          {isEditing ? (
+                            <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+                              <input
+                                type="text"
+                                value={editingTrackTitle}
+                                onChange={(e) => setEditingTrackTitle(e.target.value)}
+                                placeholder="Song name"
+                                className="min-h-[34px] flex-1 min-w-[140px] px-2.5 rounded-lg bg-[#120408] border border-[#E2B96F]/45 text-xs text-[#FBF3EA]"
+                              />
+                              <input
+                                type="text"
+                                value={editingTrackArtist}
+                                onChange={(e) => setEditingTrackArtist(e.target.value)}
+                                placeholder="Artist / Mood"
+                                className="min-h-[34px] w-40 px-2.5 rounded-lg bg-[#120408] border border-[#E2B96F]/25 text-xs text-[#FBF3EA]"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!editingTrackTitle.trim()) return;
+                                  onUpdateMusicLibrary(
+                                    musicLibrary.map((m) =>
+                                      m.id === track.id
+                                        ? {
+                                            ...m,
+                                            title: editingTrackTitle.trim(),
+                                            artist: editingTrackArtist.trim() || m.artist,
+                                          }
+                                        : m
+                                    )
+                                  );
+                                  setEditingTrackId(null);
+                                }}
+                                className="min-h-[34px] px-3 rounded-lg bg-[#E2B96F] text-[#16050A] font-semibold text-xs cursor-pointer"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingTrackId(null)}
+                                className="min-h-[34px] px-2.5 rounded-lg border border-white/15 text-xs text-[#FBF3EA]/70 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-[#FBF3EA] truncate">
+                                {track.title}
+                              </p>
+                              <p className="text-xs text-[#FBF3EA]/55">
+                                {track.artist || 'Instrumental'}
+                              </p>
+                            </div>
+                          )}
                         </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-[#FBF3EA] truncate">{track.title}</p>
-                          <p className="text-xs text-[#FBF3EA]/55">{track.artist || 'Instrumental'}</p>
-                        </div>
-                      </div>
 
-                      <div className="flex flex-wrap items-center gap-2">
-                        {track.file_url && <audio controls src={track.file_url} className="h-8 w-44" />}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onUpdateMusicLibrary(
-                              musicLibrary.map((m) =>
-                                m.id === track.id ? { ...m, is_active: !m.is_active } : m
+                        <div className="flex flex-wrap items-center gap-2">
+                          {track.file_url && (
+                            <audio controls src={track.file_url} className="h-8 w-44" />
+                          )}
+                          {!isEditing && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingTrackId(track.id);
+                                setEditingTrackTitle(track.title);
+                                setEditingTrackArtist(track.artist || '');
+                              }}
+                              aria-label={`Rename track ${track.title}`}
+                              className="min-h-[34px] px-2.5 rounded-lg bg-[#120408] border border-[#E2B96F]/25 text-[#E2B96F] hover:border-[#E2B96F] text-xs inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Rename</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onUpdateMusicLibrary(
+                                musicLibrary.map((m) =>
+                                  m.id === track.id ? { ...m, is_active: !m.is_active } : m
+                                )
                               )
-                            )
-                          }
-                          className={`min-h-[34px] px-3 rounded-lg text-xs font-semibold cursor-pointer ${
-                            track.is_active
-                              ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-500/30'
-                              : 'bg-white/5 text-[#FBF3EA]/60 border border-white/10'
-                          }`}
-                        >
-                          {track.is_active ? 'Active' : 'Hidden'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onUpdateMusicLibrary(musicLibrary.filter((m) => m.id !== track.id))
-                          }
-                          className="min-h-[34px] px-2.5 rounded-lg bg-rose-950/60 text-rose-300 border border-rose-500/30 cursor-pointer"
-                          aria-label={`Delete track ${track.title}`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                            }
+                            className={`min-h-[34px] px-3 rounded-lg text-xs font-semibold cursor-pointer ${
+                              track.is_active
+                                ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-500/30'
+                                : 'bg-white/5 text-[#FBF3EA]/60 border border-white/10'
+                            }`}
+                          >
+                            {track.is_active ? 'Active' : 'Hidden'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onUpdateMusicLibrary(musicLibrary.filter((m) => m.id !== track.id))
+                            }
+                            className="min-h-[34px] px-2.5 rounded-lg bg-rose-950/60 text-rose-300 border border-rose-500/30 cursor-pointer"
+                            aria-label={`Delete track ${track.title}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 

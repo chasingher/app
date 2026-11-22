@@ -39,6 +39,7 @@ import {
   commitProjectSavedMedia,
   formatStorageMegabytes,
   formatStorageCompact,
+  deriveCleanAudioTitle,
 } from '../utils/platformLogic';
 import {
   uploadMediaToFirebase,
@@ -516,7 +517,7 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
         );
 
         const batchOut = await compressImageBatch(imageFilesToCompress, {
-          concurrency: 2,
+          concurrency: 4,
           forcePreserveTransparency: target === 'flower',
           onStatus: (msg) => setUploadingStatus(msg),
           onProgress: (done, tot) => {
@@ -652,22 +653,47 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
             media_meta: { ...(prev.media_meta || {}), [stagedUrl]: stagedMeta },
           }));
         } else if (target === 'music') {
+          const derivedSongName = deriveCleanAudioTitle(rawFile.name);
+          const musicMeta: ProjectMediaMeta = {
+            ...stagedMeta,
+            name: derivedSongName,
+          };
           if (product === 'chasing-her') {
-            setChForm((prev) => ({
-              ...prev,
-              music_url: stagedUrl,
-              music_start: 0,
-              music_end: null,
-              media_meta: { ...(prev.media_meta || {}), [stagedUrl]: stagedMeta },
-            }));
+            setChForm((prev) => {
+              const chosenTitle =
+                !prev.music_url && prev.music_title?.trim()
+                  ? prev.music_title.trim()
+                  : derivedSongName;
+              return {
+                ...prev,
+                music_url: stagedUrl,
+                music_title: chosenTitle,
+                music_start: 0,
+                music_end: null,
+                media_meta: {
+                  ...(prev.media_meta || {}),
+                  [stagedUrl]: { ...musicMeta, name: chosenTitle },
+                },
+              };
+            });
           } else {
-            setMemForm((prev) => ({
-              ...prev,
-              music_url: stagedUrl,
-              music_start: 0,
-              music_end: null,
-              media_meta: { ...(prev.media_meta || {}), [stagedUrl]: stagedMeta },
-            }));
+            setMemForm((prev) => {
+              const chosenTitle =
+                !prev.music_url && prev.music_title?.trim()
+                  ? prev.music_title.trim()
+                  : derivedSongName;
+              return {
+                ...prev,
+                music_url: stagedUrl,
+                music_title: chosenTitle,
+                music_start: 0,
+                music_end: null,
+                media_meta: {
+                  ...(prev.media_meta || {}),
+                  [stagedUrl]: { ...musicMeta, name: chosenTitle },
+                },
+              };
+            });
           }
         }
       }
@@ -796,61 +822,104 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
 
   const handleSaveProject = async () => {
     setQuotaErrorBanner('');
-    setSaveBanner('Uploading…');
+    setSaveBanner('Preparing fast upload…');
     let hadUploadFailure = false;
 
-    if (product === 'chasing-her') {
-      let working: ChasingHerProjectData = { ...chForm, slug };
-      const currentUsage = computeProjectStorageUsage(working, 'chasing-her');
+    const uploadStagedPool = async (
+      items: ActiveBuildMediaItem[],
+      musicTitle?: string
+    ): Promise<Map<string, Awaited<ReturnType<typeof uploadMediaToFirebase>>>> => {
+      const stagedItems = items.filter(
+        (item) => item.status === 'staged' && Boolean(stagedBlobFilesRef.current[item.url])
+      );
+      const uploadedMap = new Map<string, Awaited<ReturnType<typeof uploadMediaToFirebase>>>();
+      if (stagedItems.length === 0) return uploadedMap;
 
-      // Upload ONLY the active staged files that the customer kept in their final build
-      for (const item of currentUsage.activeFiles) {
-        if (item.status === 'staged' && stagedBlobFilesRef.current[item.url]) {
+      const progressByIndex = new Array<number>(stagedItems.length).fill(0);
+      let nextIdx = 0;
+      const concurrency = Math.min(4, stagedItems.length);
+
+      const updateOverallProgress = () => {
+        const avg = Math.round(
+          progressByIndex.reduce((sum, p) => sum + p, 0) / stagedItems.length
+        );
+        setSaveBanner(
+          `Uploading ${stagedItems.length} file${stagedItems.length > 1 ? 's' : ''}… ${avg}%`
+        );
+      };
+
+      const worker = async () => {
+        while (nextIdx < stagedItems.length) {
+          const current = nextIdx++;
+          const item = stagedItems[current];
+          const entry = stagedBlobFilesRef.current[item.url];
+          if (!entry) continue;
           try {
-            const { file, kind, originalBytes, width, height } =
-              stagedBlobFilesRef.current[item.url];
             const uploaded = await uploadMediaToFirebase({
-              file,
-              kind,
+              file: entry.file,
+              kind: entry.kind,
               projectSlug: slug,
+              songTitle:
+                item.category === 'music' ? musicTitle?.trim() || item.name : undefined,
               alreadyCompressed: true,
-              originalBytes,
-              width,
-              height,
-            });
-            const permanentUrl = uploaded.url;
-            releaseMediaUrlResources(item.url);
-
-            if (working.music_url === item.url) working.music_url = permanentUrl;
-            working.photos = working.photos.map((p) =>
-              p.url === item.url ? { ...p, url: permanentUrl } : p
-            );
-            working.flower_images = [...DEFAULT_FLOWER_POOL];
-            working.media_meta = {
-              ...(working.media_meta || {}),
-              [permanentUrl]: {
-                url: permanentUrl,
-                name: item.name,
-                sizeBytes: uploaded.sizeBytes || item.sizeBytes,
-                originalSizeBytes: uploaded.originalBytes || item.originalSizeBytes,
-                savedBytes: uploaded.savedBytes ?? item.savedBytes,
-                width: uploaded.width || item.width,
-                height: uploaded.height || item.height,
-                outputFormat: uploaded.contentType || item.outputFormat,
-                category: item.category,
-                status: 'saved',
+              originalBytes: entry.originalBytes,
+              width: entry.width,
+              height: entry.height,
+              onProgress: (pct) => {
+                progressByIndex[current] = pct;
+                updateOverallProgress();
               },
-            };
+            });
+            progressByIndex[current] = 100;
+            updateOverallProgress();
+            uploadedMap.set(item.url, uploaded);
           } catch {
             hadUploadFailure = true;
           }
         }
+      };
+
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+      return uploadedMap;
+    };
+
+    if (product === 'chasing-her') {
+      let working: ChasingHerProjectData = { ...chForm, slug };
+      const currentUsage = computeProjectStorageUsage(working, 'chasing-her');
+      const uploadedMap = await uploadStagedPool(currentUsage.activeFiles, working.music_title);
+
+      for (const item of currentUsage.activeFiles) {
+        const uploaded = uploadedMap.get(item.url);
+        if (!uploaded) continue;
+        const permanentUrl = uploaded.url;
+        releaseMediaUrlResources(item.url);
+
+        if (working.music_url === item.url) working.music_url = permanentUrl;
+        working.photos = working.photos.map((p) =>
+          p.url === item.url ? { ...p, url: permanentUrl } : p
+        );
+        working.flower_images = [...DEFAULT_FLOWER_POOL];
+        working.media_meta = {
+          ...(working.media_meta || {}),
+          [permanentUrl]: {
+            url: permanentUrl,
+            name: item.category === 'music' ? working.music_title?.trim() || item.name : item.name,
+            sizeBytes: uploaded.sizeBytes || item.sizeBytes,
+            originalSizeBytes: uploaded.originalBytes || item.originalSizeBytes,
+            savedBytes: uploaded.savedBytes ?? item.savedBytes,
+            width: uploaded.width || item.width,
+            height: uploaded.height || item.height,
+            outputFormat: uploaded.contentType || item.outputFormat,
+            category: item.category,
+            status: 'saved',
+          },
+        };
       }
 
       if (hadUploadFailure) {
         setChForm(working);
         setQuotaErrorBanner(
-          'Network connection interrupted while uploading to Firebase storage. Your optimized photos remain safely staged — tap Save & Publish to retry.'
+          'Network connection interrupted while uploading to Firebase storage. Your optimized media remains safely staged — tap Save & Publish to retry.'
         );
         setSaveBanner('');
         return;
@@ -866,66 +935,48 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
 
       setChForm(committedProject);
       onSaveChasingHer(slug, committedProject);
-      try {
-        await saveChasingHerProjectToFirestore(slug, committedProject);
-      } catch {
-        // continue with local persistence when user is not signed in with Google
-      }
+      void saveChasingHerProjectToFirestore(slug, committedProject).catch(() => {});
     } else {
       let working: MemoriesProjectData = { ...memForm, slug };
       const currentUsage = computeProjectStorageUsage(working, 'memories');
+      const uploadedMap = await uploadStagedPool(currentUsage.activeFiles, working.music_title);
 
       for (const item of currentUsage.activeFiles) {
-        if (item.status === 'staged' && stagedBlobFilesRef.current[item.url]) {
-          try {
-            const { file, kind, originalBytes, width, height } =
-              stagedBlobFilesRef.current[item.url];
-            const uploaded = await uploadMediaToFirebase({
-              file,
-              kind,
-              projectSlug: slug,
-              alreadyCompressed: true,
-              originalBytes,
-              width,
-              height,
-            });
-            const permanentUrl = uploaded.url;
-            releaseMediaUrlResources(item.url);
+        const uploaded = uploadedMap.get(item.url);
+        if (!uploaded) continue;
+        const permanentUrl = uploaded.url;
+        releaseMediaUrlResources(item.url);
 
-            if (working.music_url === item.url) working.music_url = permanentUrl;
-            if (working.voice_url === item.url) working.voice_url = permanentUrl;
-            working.mosaic_images = working.mosaic_images.map((u) =>
-              u === item.url ? permanentUrl : u
-            );
-            working.memories = working.memories.map((m) =>
-              m.url === item.url ? { ...m, url: permanentUrl } : m
-            );
-            working.flower_images = [...DEFAULT_FLOWER_POOL];
-            working.media_meta = {
-              ...(working.media_meta || {}),
-              [permanentUrl]: {
-                url: permanentUrl,
-                name: item.name,
-                sizeBytes: uploaded.sizeBytes || item.sizeBytes,
-                originalSizeBytes: uploaded.originalBytes || item.originalSizeBytes,
-                savedBytes: uploaded.savedBytes ?? item.savedBytes,
-                width: uploaded.width || item.width,
-                height: uploaded.height || item.height,
-                outputFormat: uploaded.contentType || item.outputFormat,
-                category: item.category,
-                status: 'saved',
-              },
-            };
-          } catch {
-            hadUploadFailure = true;
-          }
-        }
+        if (working.music_url === item.url) working.music_url = permanentUrl;
+        if (working.voice_url === item.url) working.voice_url = permanentUrl;
+        working.mosaic_images = working.mosaic_images.map((u) =>
+          u === item.url ? permanentUrl : u
+        );
+        working.memories = working.memories.map((m) =>
+          m.url === item.url ? { ...m, url: permanentUrl } : m
+        );
+        working.flower_images = [...DEFAULT_FLOWER_POOL];
+        working.media_meta = {
+          ...(working.media_meta || {}),
+          [permanentUrl]: {
+            url: permanentUrl,
+            name: item.category === 'music' ? working.music_title?.trim() || item.name : item.name,
+            sizeBytes: uploaded.sizeBytes || item.sizeBytes,
+            originalSizeBytes: uploaded.originalBytes || item.originalSizeBytes,
+            savedBytes: uploaded.savedBytes ?? item.savedBytes,
+            width: uploaded.width || item.width,
+            height: uploaded.height || item.height,
+            outputFormat: uploaded.contentType || item.outputFormat,
+            category: item.category,
+            status: 'saved',
+          },
+        };
       }
 
       if (hadUploadFailure) {
         setMemForm(working);
         setQuotaErrorBanner(
-          'Network connection interrupted while uploading to cloud storage. Your optimized photos remain safely staged — tap Save & Publish to retry.'
+          'Network connection interrupted while uploading to cloud storage. Your optimized media remains safely staged — tap Save & Publish to retry.'
         );
         setSaveBanner('');
         return;
@@ -941,14 +992,10 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
 
       setMemForm(committedProject);
       onSaveMemories(slug, committedProject);
-      try {
-        await saveMemoriesProjectToFirestore(slug, committedProject);
-      } catch {
-        // continue with local persistence when user is not signed in with Google
-      }
+      void saveMemoriesProjectToFirestore(slug, committedProject).catch(() => {});
     }
     setSaveBanner(
-      'Upload complete · Chosen audio & optimized WebP photos permanently stored in your 50 MB Firebase build.'
+      'Upload complete · Chosen audio & optimized media permanently stored in your 50 MB Firebase build.'
     );
     setTimeout(() => setSaveBanner(''), 4000);
   };
@@ -2223,10 +2270,26 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
                   value={currentMusicUrl || ''}
                   onChange={(e) => {
                     const url = e.target.value;
+                    const matched = activeMusicLibrary.find(
+                      (t) => (t.file_url || t.id) === url
+                    );
+                    const nextTitle = matched ? matched.title : '';
                     if (product === 'chasing-her') {
-                      setChForm((p) => ({ ...p, music_url: url, music_start: 0, music_end: null }));
+                      setChForm((p) => ({
+                        ...p,
+                        music_url: url,
+                        music_title: nextTitle || p.music_title,
+                        music_start: 0,
+                        music_end: null,
+                      }));
                     } else {
-                      setMemForm((p) => ({ ...p, music_url: url, music_start: 0, music_end: null }));
+                      setMemForm((p) => ({
+                        ...p,
+                        music_url: url,
+                        music_title: nextTitle || p.music_title,
+                        music_start: 0,
+                        music_end: null,
+                      }));
                     }
                   }}
                   className="mt-1.5 w-full min-h-[44px] rounded-xl border border-[#DCC397] bg-[#FFFDF9] px-3 text-xs text-[#2B1318]"
@@ -2245,6 +2308,7 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
                   <Music className="h-4 w-4 text-[#7A1C33]" />
                   <span>Upload Background Song</span>
                   <input
+                    data-testid="builder-audio-upload-input"
                     type="file"
                     accept="audio/*"
                     onChange={(e) => handleFirebaseFileUpload(e, 'music')}
@@ -2253,6 +2317,43 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
                 </label>
               </div>
             </div>
+
+            <label className="block text-xs font-semibold text-[#5C3D31]">
+              Song Name (Displayed on your site &amp; storage list)
+              <input
+                data-testid="builder-song-name-input"
+                type="text"
+                value={(product === 'chasing-her' ? chForm.music_title : memForm.music_title) || ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (product === 'chasing-her') {
+                    setChForm((p) => {
+                      const nextMeta = { ...(p.media_meta || {}) };
+                      if (p.music_url && nextMeta[p.music_url]) {
+                        nextMeta[p.music_url] = {
+                          ...nextMeta[p.music_url],
+                          name: val.trim() || nextMeta[p.music_url].name,
+                        };
+                      }
+                      return { ...p, music_title: val, media_meta: nextMeta };
+                    });
+                  } else {
+                    setMemForm((p) => {
+                      const nextMeta = { ...(p.media_meta || {}) };
+                      if (p.music_url && nextMeta[p.music_url]) {
+                        nextMeta[p.music_url] = {
+                          ...nextMeta[p.music_url],
+                          name: val.trim() || nextMeta[p.music_url].name,
+                        };
+                      }
+                      return { ...p, music_title: val, media_meta: nextMeta };
+                    });
+                  }
+                }}
+                placeholder="Name your song (e.g. Our Anniversary Song)"
+                className="mt-1.5 w-full min-h-[44px] rounded-xl border border-[#DCC397] bg-[#FFFDF9] px-3.5 py-2 text-sm text-[#2B1318]"
+              />
+            </label>
 
             <MusicTrimmer
               musicUrl={currentMusicUrl}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Heart,
+  Lock,
   Sparkles,
   UserCheck,
   Wand2,
@@ -22,11 +23,17 @@ import {
   SITE_EXPERIENCES_SETTING_KEY,
   mergeSiteExperiences,
   serializeSiteExperiences,
+  PUBLIC_SHOWCASE_SLUGS,
+  isPublicShowcaseProject,
+  canCustomerAccessProjectSlug,
+  canBypassPreviewPin,
 } from './utils/platformLogic';
 import {
   INITIAL_ORDERS,
   INITIAL_CHASING_HER_PROJECTS,
   INITIAL_MEMORIES_PROJECTS,
+  OFFICIAL_CHASING_HER_SHOWCASE,
+  OFFICIAL_MEMORIES_SHOWCASE,
   INITIAL_TESTIMONIALS,
   DEFAULT_FLOWER_POOL,
   INITIAL_MUSIC_LIBRARY,
@@ -101,7 +108,14 @@ export function App() {
   const [builderSlug, setBuilderSlug] = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     const slugParam = params.get('slug');
-    return slugParam && slugParam.trim() ? slugParam.trim() : 'ama-and-kofi';
+    return slugParam && slugParam.trim() ? slugParam.trim() : '';
+  });
+  const [customerEmailSession, setCustomerEmailSession] = useState<string>(() => {
+    try {
+      return (localStorage.getItem('cust_email') || '').trim().toLowerCase();
+    } catch {
+      return '';
+    }
   });
   const [justPaidOrderId, setJustPaidOrderId] = useState<string | null>(null);
 
@@ -285,12 +299,14 @@ export function App() {
     newOrder: SubmissionOrder,
     destination: 'builder' | 'brief' | 'my-site'
   ) => {
-    try {
-      if (newOrder.email) {
-        localStorage.setItem('cust_email', newOrder.email.trim().toLowerCase());
+    const cleanEmail = (newOrder.email || '').trim().toLowerCase();
+    if (cleanEmail) {
+      setCustomerEmailSession(cleanEmail);
+      try {
+        localStorage.setItem('cust_email', cleanEmail);
+      } catch {
+        // Ignore storage errors
       }
-    } catch {
-      // Ignore storage errors
     }
 
     setOrders((prev) => [newOrder, ...prev]);
@@ -303,38 +319,38 @@ export function App() {
         ? 'memories'
         : 'chasing-her';
 
-    // Seed a personalized starter project for this customer's slug
+    // Seed a strictly private starter project cloned only from our official studio template (never another customer's letter)
     if (targetBuildProduct === 'chasing-her') {
-      const template = chasingHerProjects['ama-and-kofi'] || Object.values(chasingHerProjects)[0];
-      if (template && !chasingHerProjects[newOrder.slug]) {
+      if (!chasingHerProjects[newOrder.slug]) {
         const partnerLabel = newOrder.brief?.for || 'My Love';
         setChasingHerProjects((prev) => ({
           ...prev,
           [newOrder.slug]: {
-            ...template,
+            ...OFFICIAL_CHASING_HER_SHOWCASE,
             slug: newOrder.slug,
-            pin: newOrder.pin || template.pin,
+            pin: newOrder.pin || OFFICIAL_CHASING_HER_SHOWCASE.pin,
+            is_public_showcase: false,
             intro_message:
               newOrder.brief?.feel && newOrder.brief.feel.length > 6
                 ? newOrder.brief.feel
-                : `Happy Birthday, ${partnerLabel} — every ordinary day becomes unforgettable because you are in it.`,
+                : `For ${partnerLabel} — every ordinary day becomes unforgettable because you are in it.`,
             letter_title: `My Dearest ${partnerLabel},`,
           },
         }));
       }
     } else {
-      const template = memoriesProjects['wanjiku-and-brian'] || Object.values(memoriesProjects)[0];
-      if (template && !memoriesProjects[newOrder.slug]) {
+      if (!memoriesProjects[newOrder.slug]) {
         const partnerLabel = newOrder.brief?.for || 'My Love';
         setMemoriesProjects((prev) => ({
           ...prev,
           [newOrder.slug]: {
-            ...template,
+            ...OFFICIAL_MEMORIES_SHOWCASE,
             slug: newOrder.slug,
-            pin: newOrder.pin || template.pin,
-            hero_title: `Happy Birthday, ${partnerLabel}`,
+            pin: newOrder.pin || OFFICIAL_MEMORIES_SHOWCASE.pin,
+            is_public_showcase: false,
+            hero_title: `For ${partnerLabel}`,
             collage_names: `${partnerLabel} & ${newOrder.full_name.split(' ')[0]}`,
-            letter_title: `Happy Birthday, ${partnerLabel},`,
+            letter_title: `To My Heart, ${partnerLabel},`,
           },
         }));
       }
@@ -411,10 +427,31 @@ export function App() {
     );
   };
 
+  // Sales page curated showcases: ONLY official studio demos explicitly marked as public showcases are ever exposed on sales pages
+  const curatedChasingHerDemo =
+    chasingHerProjects[PUBLIC_SHOWCASE_SLUGS['chasing-her']]?.is_public_showcase === true
+      ? chasingHerProjects[PUBLIC_SHOWCASE_SLUGS['chasing-her']]
+      : OFFICIAL_CHASING_HER_SHOWCASE;
+
+  const curatedMemoriesDemo =
+    memoriesProjects[PUBLIC_SHOWCASE_SLUGS.memories]?.is_public_showcase === true
+      ? memoriesProjects[PUBLIC_SHOWCASE_SLUGS.memories]
+      : OFFICIAL_MEMORIES_SHOWCASE;
+
+  // Strict privacy guard for /builder/: customer may ONLY open a slug that belongs to their own order
+  const canOpenCurrentBuilder = canCustomerAccessProjectSlug({
+    slug: builderSlug,
+    viewerEmail: customerEmailSession,
+    justPaidOrderId,
+    orders,
+    isAdmin: false,
+  });
+
   // Resolve the active customer order for builderSlug so the customer is strictly locked to the edition they paid for
-  const activeCustomerOrder =
-    orders.find((o) => o.slug === builderSlug) ||
-    (justPaidOrderId ? orders.find((o) => o.id === justPaidOrderId) : undefined);
+  const activeCustomerOrder = canOpenCurrentBuilder
+    ? orders.find((o) => o.slug === builderSlug) ||
+      (justPaidOrderId ? orders.find((o) => o.id === justPaidOrderId) : undefined)
+    : undefined;
 
   const lockedCustomerProduct: 'chasing-her' | 'memories' = activeCustomerOrder
     ? activeCustomerOrder.product === 'memories' ||
@@ -422,6 +459,19 @@ export function App() {
       ? 'memories'
       : 'chasing-her'
     : builderProduct;
+
+  // Strict privacy resolution for /preview/: never fall back to another customer's letter, never bypass PIN on private creations
+  const previewProjectRecord =
+    builderProduct === 'memories'
+      ? memoriesProjects[builderSlug]
+      : chasingHerProjects[builderSlug];
+  const previewIsPublicShowcase = isPublicShowcaseProject(builderSlug, previewProjectRecord);
+  const previewBypassPin = canBypassPreviewPin({
+    isAdmin: false,
+    isBuilderPreview: false,
+    isPublicShowcase: previewIsPublicShowcase,
+    autoStart,
+  });
 
   return (
     <div className="min-h-screen bg-[#120408] text-[#FBF3EA] flex flex-col">
@@ -523,8 +573,8 @@ export function App() {
             testimonials={testimonials}
             showcaseMedia={showcaseMedia}
             siteExperiences={siteExperiences}
-            chasingHerDemo={chasingHerProjects['ama-and-kofi'] || Object.values(chasingHerProjects)[0]}
-            memoriesDemo={memoriesProjects['wanjiku-and-brian'] || Object.values(memoriesProjects)[0]}
+            chasingHerDemo={curatedChasingHerDemo}
+            memoriesDemo={curatedMemoriesDemo}
             onOrderCreated={handleOrderCreated}
             onOpenMySite={() => navigateToRoute({ view: 'my-site' })}
             onOpenAdmin={() => navigateToRoute({ view: 'admin' })}
@@ -533,18 +583,54 @@ export function App() {
 
         {activeView === 'builder' && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 pb-24">
-            <SiteBuilderStudio
-              mode="customer"
-              initialProduct={lockedCustomerProduct}
-              activeSlug={builderSlug}
-              chasingHerProjects={chasingHerProjects}
-              memoriesProjects={memoriesProjects}
-              onSaveChasingHer={handleSaveChasingHer}
-              onSaveMemories={handleSaveMemories}
-              onBackToAccount={() => navigateToRoute({ view: 'my-site' })}
-              globalFlowerPool={globalFlowerPool}
-              globalMusicLibrary={musicLibrary}
-            />
+            {canOpenCurrentBuilder ? (
+              <SiteBuilderStudio
+                mode="customer"
+                initialProduct={lockedCustomerProduct}
+                activeSlug={builderSlug}
+                chasingHerProjects={chasingHerProjects}
+                memoriesProjects={memoriesProjects}
+                onSaveChasingHer={handleSaveChasingHer}
+                onSaveMemories={handleSaveMemories}
+                onBackToAccount={() => navigateToRoute({ view: 'my-site' })}
+                globalFlowerPool={globalFlowerPool}
+                globalMusicLibrary={musicLibrary}
+              />
+            ) : (
+              <div
+                data-testid="builder-privacy-gate"
+                className="max-w-xl mx-auto rounded-2xl bg-[#1A060C] border border-[#E2B96F]/25 p-8 sm:p-10 text-center space-y-5 mt-8"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-[#260912] border border-[#E2B96F]/30 flex items-center justify-center mx-auto">
+                  <Lock className="w-6 h-6 text-[#E2B96F]" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-[#E2B96F]">Private Personal Studio</p>
+                  <h1 className="font-serif text-2xl sm:text-3xl text-[#FBF3EA]">
+                    This Love Website Studio Is Private
+                  </h1>
+                  <p className="text-sm text-[#FBF3EA]/70 leading-relaxed">
+                    Because every letter is deeply personal, customers can only view and edit their own creation. Sign in with your checkout email in My Site to open your private studio.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => navigateToRoute({ view: 'my-site' })}
+                    className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Open My Site Portal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigateToRoute({ view: 'order' })}
+                    className="min-h-[44px] px-5 py-2.5 rounded-xl border border-[#E2B96F]/30 bg-[#120408] hover:border-[#E2B96F] text-[#FBF3EA] text-xs font-medium transition-colors cursor-pointer"
+                  >
+                    Create Your Own Gift
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -556,11 +642,14 @@ export function App() {
               settingsMap={settingsMap}
               chasingHerProjects={chasingHerProjects}
               memoriesProjects={memoriesProjects}
+              onActiveEmailChange={(email) => setCustomerEmailSession(email)}
+              onOrderGift={() => navigateToRoute({ view: 'order' })}
               onOpenBuilder={(order) => {
                 const prod =
                   order.product === 'memories' || order.build_product === 'memories'
                     ? 'memories'
                     : 'chasing-her';
+                setCustomerEmailSession(order.email.trim().toLowerCase());
                 setBuilderProduct(prod);
                 setBuilderSlug(order.slug);
                 navigateToRoute({ view: 'builder' });
@@ -600,13 +689,58 @@ export function App() {
 
         {activeView === 'preview' && (
           <div className="max-w-5xl mx-auto px-4 py-8">
-            <RecipientSitePreview
-              product={builderProduct}
-              chasingHerData={chasingHerProjects[builderSlug]}
-              memoriesData={memoriesProjects[builderSlug]}
-              bypassPinByDefault={autoStart}
-              onClose={() => navigateToRoute({ view: 'my-site' })}
-            />
+            {previewProjectRecord ? (
+              <RecipientSitePreview
+                product={builderProduct}
+                chasingHerData={
+                  builderProduct === 'chasing-her'
+                    ? (previewProjectRecord as ChasingHerProjectData)
+                    : undefined
+                }
+                memoriesData={
+                  builderProduct === 'memories'
+                    ? (previewProjectRecord as MemoriesProjectData)
+                    : undefined
+                }
+                isPublicShowcase={previewIsPublicShowcase}
+                bypassPinByDefault={previewBypassPin}
+                onClose={() => navigateToRoute({ view: 'my-site' })}
+              />
+            ) : (
+              <div
+                data-testid="preview-privacy-gate"
+                className="max-w-xl mx-auto rounded-2xl bg-[#1A060C] border border-[#E2B96F]/25 p-8 sm:p-10 text-center space-y-5 mt-8"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-[#260912] border border-[#E2B96F]/30 flex items-center justify-center mx-auto">
+                  <Lock className="w-6 h-6 text-[#E2B96F]" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-[#E2B96F]">Private Keepsake Vault</p>
+                  <h1 className="font-serif text-2xl sm:text-3xl text-[#FBF3EA]">
+                    This Personal Letter Is Private
+                  </h1>
+                  <p className="text-sm text-[#FBF3EA]/70 leading-relaxed">
+                    Only the recipient with their direct private link and secret 6-digit PIN can open a customer&apos;s letter. Public visitors can experience our official studio demos on the main page.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => navigateToRoute({ view: 'order' })}
+                    className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Explore Official Demo Experience
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigateToRoute({ view: 'my-site' })}
+                    className="min-h-[44px] px-5 py-2.5 rounded-xl border border-[#E2B96F]/30 bg-[#120408] hover:border-[#E2B96F] text-[#FBF3EA] text-xs font-medium transition-colors cursor-pointer"
+                  >
+                    Find My Own Site
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>

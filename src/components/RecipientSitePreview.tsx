@@ -31,6 +31,7 @@ interface RecipientSitePreviewProps {
   memoriesData?: MemoriesProjectData;
   onClose?: () => void;
   bypassPinByDefault?: boolean;
+  isPublicShowcase?: boolean;
 }
 
 type ChasingHerStage = 'gate' | 'login' | 'flowers' | 'main';
@@ -213,10 +214,12 @@ function RedesignedPasscodeStage({
   expectedPin,
   onUnlock,
   productLabel,
+  showDemoHelper = false,
 }: {
   expectedPin: string;
   onUnlock: () => void;
   productLabel: string;
+  showDemoHelper?: boolean;
 }) {
   const maxLen = Math.max(4, (expectedPin || '140226').length);
   const [digits, setDigits] = useState('');
@@ -370,25 +373,35 @@ function RedesignedPasscodeStage({
         </button>
       </div>
 
-      {/* Preview Demo Helper */}
-      <div className="relative z-10 flex flex-wrap items-center justify-center gap-3 text-xs text-[#FBF3EA]/70 pt-1">
-        <span>
-          {productLabel} Demo PIN:{' '}
-          <strong className="font-mono text-[#E2B96F] tracking-widest">{expectedPin}</strong>
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            setSuccess(true);
-            setDigits(expectedPin);
-            setTimeout(onUnlock, 380);
-          }}
-          className="inline-flex items-center gap-1 text-[#E2B96F] hover:underline font-medium cursor-pointer"
+      {/* Preview Demo Helper (Shown ONLY on official public showcase demos, never on private customer letters) */}
+      {showDemoHelper ? (
+        <div className="relative z-10 flex flex-wrap items-center justify-center gap-3 text-xs text-[#FBF3EA]/70 pt-1">
+          <span>
+            {productLabel} Demo PIN:{' '}
+            <strong className="font-mono text-[#E2B96F] tracking-widest">{expectedPin}</strong>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setSuccess(true);
+              setDigits(expectedPin);
+              setTimeout(onUnlock, 380);
+            }}
+            className="inline-flex items-center gap-1 text-[#E2B96F] hover:underline font-medium cursor-pointer"
+          >
+            <Unlock className="w-3.5 h-3.5" />
+            <span>Skip Passcode</span>
+          </button>
+        </div>
+      ) : (
+        <div
+          data-testid="private-passcode-notice"
+          className="relative z-10 flex items-center justify-center gap-1.5 text-xs text-[#FBF3EA]/60 pt-1 text-center"
         >
-          <Unlock className="w-3.5 h-3.5" />
-          <span>Skip Passcode</span>
-        </button>
-      </div>
+          <Lock className="w-3.5 h-3.5 text-[#E2B96F]/80 shrink-0" />
+          <span>Private personal letter · Enter the secret PIN shared with you</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -630,6 +643,7 @@ export const RecipientSitePreview: React.FC<RecipientSitePreviewProps> = ({
   memoriesData,
   onClose,
   bypassPinByDefault = false,
+  isPublicShowcase = false,
 }) => {
   const chData: ChasingHerProjectData = chasingHerData || {
     slug: 'ama-and-kofi',
@@ -721,6 +735,9 @@ export const RecipientSitePreview: React.FC<RecipientSitePreviewProps> = ({
   const [isMuted, setIsMuted] = useState(false);
 
   const activeMusicUrl = product === 'chasing-her' ? chData.music_url : memData.music_url;
+  const activeMusicTitle = (
+    product === 'chasing-her' ? chData.music_title : memData.music_title
+  )?.trim();
   const activeMusicStart =
     (product === 'chasing-her' ? chData.music_start : memData.music_start) || 0;
   const activeMusicEnd =
@@ -908,11 +925,15 @@ export const RecipientSitePreview: React.FC<RecipientSitePreviewProps> = ({
             ) : (
               <Play className="h-3.5 w-3.5 text-[#E2B96F]" />
             )}
-            <span className="hidden sm:inline">
+            <span className="hidden sm:inline max-w-[160px] truncate">
               {product === 'memories' && activeVoiceUrl
                 ? isAudioPlaying
-                  ? 'Duet Playing'
+                  ? activeMusicTitle
+                    ? `Duet · ${activeMusicTitle}`
+                    : 'Duet Playing'
                   : 'Play Duet'
+                : activeMusicTitle
+                ? `${isAudioPlaying ? 'Pause' : 'Play'} · ${activeMusicTitle}`
                 : isAudioPlaying
                 ? 'Pause Song'
                 : 'Play Song'}
@@ -976,6 +997,7 @@ export const RecipientSitePreview: React.FC<RecipientSitePreviewProps> = ({
             <RedesignedPasscodeStage
               expectedPin={expectedPin}
               productLabel="Chasing Her"
+              showDemoHelper={isPublicShowcase}
               onUnlock={() => {
                 startMusicOrDuet();
                 setChStage('flowers');
@@ -1293,6 +1315,7 @@ export const RecipientSitePreview: React.FC<RecipientSitePreviewProps> = ({
             <RedesignedPasscodeStage
               expectedPin={expectedPin}
               productLabel="Memories"
+              showDemoHelper={isPublicShowcase}
               onUnlock={() => setMemStage('intro')}
             />
           )}

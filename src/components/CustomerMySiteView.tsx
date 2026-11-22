@@ -37,6 +37,8 @@ interface CustomerMySiteViewProps {
   memoriesProjects: Record<string, MemoriesProjectData>;
   onOpenBuilder: (order: SubmissionOrder) => void;
   onMarkPaymentReturned: (orderId: string) => void;
+  onActiveEmailChange?: (email: string) => void;
+  onOrderGift?: () => void;
 }
 
 const PROGRESS_STAGES: Array<{ id: OrderProgressStage; step: string; label: string; desc: string }> = [
@@ -74,6 +76,8 @@ export const CustomerMySiteView: React.FC<CustomerMySiteViewProps> = ({
   memoriesProjects,
   onOpenBuilder,
   onMarkPaymentReturned,
+  onActiveEmailChange,
+  onOrderGift,
 }) => {
   const [emailQuery, setEmailQuery] = useState(() => {
     try {
@@ -97,19 +101,24 @@ export const CustomerMySiteView: React.FC<CustomerMySiteViewProps> = ({
     ? orders.find((o) => o.id === justPaidOrderId) || null
     : null;
 
-  const matchedOrders = orders.filter((o) =>
-    activeEmail.trim()
-      ? o.email.toLowerCase() === activeEmail.trim().toLowerCase()
-      : true
-  );
+  // Strict privacy isolation: ONLY show orders matching the customer's exact checkout email or current paid session.
+  // Never list or expose other customers' personal letters or orders.
+  const matchedOrders = orders.filter((o) => {
+    if (justPaidOrderId && o.id === justPaidOrderId) return true;
+    const cleanEmail = activeEmail.trim().toLowerCase();
+    if (!cleanEmail) return false;
+    return o.email.trim().toLowerCase() === cleanEmail;
+  });
 
   const handleLookup = async (e: React.FormEvent) => {
     e.preventDefault();
     const clean = emailQuery.trim().toLowerCase();
     setLoadingLookup(true);
     setActiveEmail(clean);
+    onActiveEmailChange?.(clean);
     try {
       if (clean) localStorage.setItem('cust_email', clean);
+      else localStorage.removeItem('cust_email');
       await lookupCustomerOrdersInFirestore(clean);
     } catch {
       // Fallback to local state seamlessly
@@ -182,18 +191,19 @@ export const CustomerMySiteView: React.FC<CustomerMySiteViewProps> = ({
         <PWAInstallButton contextLabel="My Site" variant="card" />
       </section>
 
-      {/* Email Lookup Bar + Instant Preview Accounts */}
-      <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/18 p-5 sm:p-6 space-y-4">
+      {/* Private Order Lookup Bar (Strict Customer Isolation) */}
+      <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/18 p-5 sm:p-6 space-y-3">
         <form onSubmit={handleLookup} className="flex flex-col sm:flex-row gap-3">
           <label className="flex-1">
             <span className="sr-only">Enter your order email address</span>
             <div className="relative">
               <Search className="h-4 w-4 text-[#FBF3EA]/45 absolute left-4 top-1/2 -translate-y-1/2" />
               <input
+                data-testid="mysite-email-input"
                 type="email"
                 value={emailQuery}
                 onChange={(e) => setEmailQuery(e.target.value)}
-                placeholder="Enter your order email (e.g. kofi@example.com)"
+                placeholder="Enter the email address you used at checkout"
                 className="w-full min-h-[46px] rounded-xl border border-[#E2B96F]/20 bg-[#120408] pl-11 pr-4 py-2.5 text-sm text-[#FBF3EA] placeholder:text-[#FBF3EA]/40 focus:outline-none focus:border-[#E2B96F]"
               />
             </div>
@@ -211,50 +221,62 @@ export const CustomerMySiteView: React.FC<CustomerMySiteViewProps> = ({
               onClick={() => {
                 setEmailQuery('');
                 setActiveEmail('');
+                onActiveEmailChange?.('');
+                try {
+                  localStorage.removeItem('cust_email');
+                } catch {
+                  // ignore
+                }
               }}
               className="min-h-[46px] px-4 py-2.5 rounded-xl border border-[#E2B96F]/25 bg-[#120408] text-xs font-medium text-[#FBF3EA]/80 hover:border-[#E2B96F] cursor-pointer whitespace-nowrap shrink-0"
             >
-              Show All
+              Clear Email
             </button>
           )}
         </form>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs text-[#FBF3EA]/55">
-          <span>Quick preview orders:</span>
-          {[
-            { email: 'kofi@example.com', label: '🇬🇭 Kofi (Hosted)' },
-            { email: 'brian@example.com', label: '🇰🇪 Brian (Building)' },
-            { email: 'kwesi@example.com', label: '🇬🇭 Kwesi & Abena (Review)' },
-          ].map((acc) => (
-            <button
-              key={acc.email}
-              type="button"
-              onClick={() => {
-                setEmailQuery(acc.email);
-                setActiveEmail(acc.email);
-              }}
-              className={`min-h-[34px] px-3 py-1 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
-                activeEmail.toLowerCase() === acc.email
-                  ? 'border-[#E2B96F] bg-[#E2B96F] text-[#16050A] font-semibold'
-                  : 'border-[#E2B96F]/20 bg-[#120408] text-[#FBF3EA]/80 hover:border-[#E2B96F]/50'
-              }`}
-            >
-              {acc.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 text-xs text-[#FBF3EA]/55">
+          <Lock className="h-3.5 w-3.5 text-[#E2B96F]/80 shrink-0" />
+          <span>
+            Personal letters are strictly private. Only orders linked to your own checkout email can be accessed here.
+          </span>
         </div>
       </div>
 
       {/* Customer Orders List */}
       {matchedOrders.length === 0 ? (
-        <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/18 p-12 text-center space-y-3">
-          <Heart className="h-8 w-8 text-[#E2B96F] mx-auto opacity-85" />
+        <div
+          data-testid="mysite-private-empty-state"
+          className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/18 p-10 sm:p-12 text-center space-y-4"
+        >
+          <div className="w-12 h-12 rounded-2xl bg-[#260912] border border-[#E2B96F]/25 flex items-center justify-center mx-auto">
+            {activeEmail ? (
+              <Heart className="h-6 w-6 text-[#E2B96F]" />
+            ) : (
+              <Lock className="h-6 w-6 text-[#E2B96F]" />
+            )}
+          </div>
           <h2 className="font-serif text-2xl text-[#FBF3EA]">
-            No projects found for “{activeEmail}”
+            {activeEmail
+              ? `No order found for “${activeEmail}”`
+              : 'Your Personal Letters Stay Private'}
           </h2>
-          <p className="text-sm text-[#FBF3EA]/65 max-w-md mx-auto">
-            Double-check your email spelling or tap “Show All” above to view sample customer sites.
+          <p className="text-sm text-[#FBF3EA]/65 max-w-md mx-auto leading-relaxed">
+            {activeEmail
+              ? 'Check your email spelling or enter the exact email address you used during checkout. Other customers’ letters are never visible here.'
+              : 'Enter your checkout email above to access your own love website, secret PIN, and private Website Builder.'}
           </p>
+          {onOrderGift && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={onOrderGift}
+                className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#E2B96F] hover:bg-[#edd18f] text-[#16050A] text-xs font-semibold transition-colors cursor-pointer"
+              >
+                Create Your Own Love Website
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-6">
@@ -508,6 +530,8 @@ export const CustomerMySiteView: React.FC<CustomerMySiteViewProps> = ({
               }
               chasingHerData={chasingHerProjects[previewOrder.slug]}
               memoriesData={memoriesProjects[previewOrder.slug]}
+              bypassPinByDefault={true}
+              isPublicShowcase={false}
               onClose={() => setPreviewOrder(null)}
             />
           </div>

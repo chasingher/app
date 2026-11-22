@@ -29,6 +29,11 @@ import {
   DEFAULT_SITE_EXPERIENCES,
   mergeSiteExperiences,
   serializeSiteExperiences,
+  PUBLIC_SHOWCASE_SLUGS,
+  deriveCleanAudioTitle,
+  isPublicShowcaseProject,
+  canCustomerAccessProjectSlug,
+  canBypassPreviewPin,
 } from './platformLogic';
 import {
   buildChasingHerStandaloneHtml,
@@ -496,6 +501,100 @@ test('Site experience showcase config safely merges partial admin overrides and 
 
   const malformed = mergeSiteExperiences('{bad-json');
   assert.equal(malformed.memories.title, DEFAULT_SITE_EXPERIENCES.memories.title);
+});
+
+test('Audio song naming prefers custom title, cleans filenames, and falls back gracefully', () => {
+  assert.equal(
+    deriveCleanAudioTitle('01_romantic-piano_final.mp3', 'Our Midnight Piano'),
+    'Our Midnight Piano'
+  );
+  assert.equal(
+    deriveCleanAudioTitle('C:\\Users\\kofi\\our_first-dance_mix.m4a'),
+    'our first dance mix'
+  );
+  assert.equal(deriveCleanAudioTitle(''), 'Custom Soundtrack');
+  assert.equal(deriveCleanAudioTitle('   ', '   '), 'Custom Soundtrack');
+});
+
+test('Personal letter privacy guards isolate customer creations from public showcases and other visitors', () => {
+  assert.equal(PUBLIC_SHOWCASE_SLUGS['chasing-her'], 'ama-and-kofi');
+  assert.equal(PUBLIC_SHOWCASE_SLUGS.memories, 'wanjiku-and-brian');
+
+  // Official studio demos are public showcases; customer creations are strictly private
+  assert.equal(isPublicShowcaseProject('ama-and-kofi', { is_public_showcase: true }), true);
+  assert.equal(isPublicShowcaseProject('wanjiku-and-brian', { is_public_showcase: true }), true);
+  assert.equal(isPublicShowcaseProject('abena-and-kwesi', { is_public_showcase: false }), false);
+  assert.equal(isPublicShowcaseProject('for-amara-123'), false);
+  assert.equal(isPublicShowcaseProject('ama-and-kofi', { is_public_showcase: false }), false);
+
+  const sampleOrders = [
+    { id: 'ord-1', slug: 'abena-and-kwesi', email: 'kwesi@example.com' },
+    { id: 'ord-2', slug: 'for-amara', email: 'david@example.com' },
+  ];
+
+  // Unauthenticated visitor or wrong customer email cannot access private builder studio
+  assert.equal(
+    canCustomerAccessProjectSlug({
+      slug: 'abena-and-kwesi',
+      viewerEmail: '',
+      orders: sampleOrders,
+    }),
+    false
+  );
+  assert.equal(
+    canCustomerAccessProjectSlug({
+      slug: 'abena-and-kwesi',
+      viewerEmail: 'david@example.com',
+      orders: sampleOrders,
+    }),
+    false
+  );
+
+  // Matching email owner, active checkout order, or admin can access
+  assert.equal(
+    canCustomerAccessProjectSlug({
+      slug: 'abena-and-kwesi',
+      viewerEmail: 'KWESI@example.com',
+      orders: sampleOrders,
+    }),
+    true
+  );
+  assert.equal(
+    canCustomerAccessProjectSlug({
+      slug: 'abena-and-kwesi',
+      viewerEmail: '',
+      justPaidOrderId: 'ord-1',
+      orders: sampleOrders,
+    }),
+    true
+  );
+  assert.equal(
+    canCustomerAccessProjectSlug({
+      slug: 'abena-and-kwesi',
+      viewerEmail: '',
+      orders: sampleOrders,
+      isAdmin: true,
+    }),
+    true
+  );
+
+  // Private letters must NEVER bypass their PIN via ?autostart=1
+  assert.equal(
+    canBypassPreviewPin({ isPublicShowcase: false, autoStart: true }),
+    false
+  );
+  assert.equal(
+    canBypassPreviewPin({ isPublicShowcase: true, autoStart: true }),
+    true
+  );
+  assert.equal(
+    canBypassPreviewPin({ isAdmin: true, isPublicShowcase: false }),
+    true
+  );
+  assert.equal(
+    canBypassPreviewPin({ isBuilderPreview: true, isPublicShowcase: false }),
+    true
+  );
 });
 
 
