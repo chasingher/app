@@ -68,6 +68,7 @@ export const BirthdayInteractiveAdminPanel: React.FC<
     const nextDraft: BirthdayInteractiveConfig = {
       ...draft,
       verifiedTestimonials: [...draft.verifiedTestimonials, entry],
+      testimonialsExplicitlyCleared: false,
     };
     setDraft(nextDraft);
     onSaveConfig(nextDraft);
@@ -87,17 +88,18 @@ export const BirthdayInteractiveAdminPanel: React.FC<
     const nextDraft: BirthdayInteractiveConfig = {
       ...draft,
       verifiedTestimonials: [...draft.verifiedTestimonials, ...additions],
+      testimonialsExplicitlyCleared: false,
     };
     setDraft(nextDraft);
     onSaveConfig(nextDraft);
   };
 
   const handleRemoveTestimonial = (id: string) => {
+    const remaining = draft.verifiedTestimonials.filter((t) => t.id !== id);
     const nextDraft: BirthdayInteractiveConfig = {
       ...draft,
-      verifiedTestimonials: draft.verifiedTestimonials.filter(
-        (t) => t.id !== id
-      ),
+      verifiedTestimonials: remaining,
+      testimonialsExplicitlyCleared: remaining.length === 0,
     };
     setDraft(nextDraft);
     onSaveConfig(nextDraft);

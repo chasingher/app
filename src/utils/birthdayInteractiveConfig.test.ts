@@ -200,13 +200,33 @@ test('birthday checkout requires exact 6-digit PIN, consent, and stays disabled 
   assert.equal(valid.normalizedWhatsapp, '+254712345678');
 });
 
-test('birthday config hides testimonials by default and safely merges verified entries', () => {
+test('birthday config includes verified birthday testimonials by default and safely merges overrides', () => {
+  assert.equal(PORTABLE_BIRTHDAY_STORIES.length, 3);
   assert.equal(
     DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG.verifiedTestimonials.length,
-    0
+    3
   );
-  assert.equal(PORTABLE_BIRTHDAY_STORIES.length, 3);
 
+  // Legacy saved configs that had [] before default stories were enabled auto-upgrade
+  const legacyUpgraded = mergeBirthdayInteractiveConfig(
+    JSON.stringify({
+      ...DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG,
+      verifiedTestimonials: [],
+    })
+  );
+  assert.equal(legacyUpgraded.verifiedTestimonials.length, 3);
+
+  // Explicitly cleared by admin stays empty
+  const explicitlyCleared = mergeBirthdayInteractiveConfig(
+    JSON.stringify({
+      ...DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG,
+      verifiedTestimonials: [],
+      testimonialsExplicitlyCleared: true,
+    })
+  );
+  assert.equal(explicitlyCleared.verifiedTestimonials.length, 0);
+
+  // Unverified items are filtered out
   const merged = mergeBirthdayInteractiveConfig(
     serializeBirthdayInteractiveConfig({
       ...DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG,

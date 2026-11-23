@@ -1213,9 +1213,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
             )}
 
             {activeTab !== 'orders' && activeTab !== 'countries' && (
-              <div className="hidden sm:block">
-                <PWAInstallButton contextLabel="Backstage Admin" variant="compact" />
-              </div>
+              <PWAInstallButton contextLabel="Backstage Admin" variant="compact" />
             )}
           </div>
         </header>

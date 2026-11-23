@@ -16,6 +16,20 @@
     <meta name="apple-mobile-web-app-title" content="ChasingHer" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      window.__chPwaPrompt = null;
+      window.__chPwaInstalled = false;
+      window.addEventListener('beforeinstallprompt', function (event) {
+        event.preventDefault();
+        window.__chPwaPrompt = event;
+        window.dispatchEvent(new CustomEvent('chasingher:pwa-prompt-changed'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__chPwaPrompt = null;
+        window.__chPwaInstalled = true;
+        window.dispatchEvent(new CustomEvent('chasingher:pwa-prompt-changed'));
+      });
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

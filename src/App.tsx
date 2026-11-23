@@ -774,9 +774,7 @@ export function App() {
                 ))}
               </div>
 
-              <div className="hidden sm:block">
-                <PWAInstallButton contextLabel="My Site" variant="compact" />
-              </div>
+              <PWAInstallButton contextLabel="My Site" variant="compact" />
             </div>
           </div>
         </header>

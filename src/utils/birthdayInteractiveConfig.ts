@@ -120,6 +120,7 @@ export interface BirthdayInteractiveConfig {
   checkout: BirthdayInteractiveCheckoutConfig;
   editions: readonly BirthdayEditionSpec[];
   verifiedTestimonials: VerifiedTestimonial[];
+  testimonialsExplicitlyCleared?: boolean;
 }
 
 export const BIRTHDAY_INTERACTIVE_SETTING_KEY =
@@ -574,8 +575,7 @@ export const DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG: BirthdayInteractiveConfig = {
     autoSaveLabel: '48-hour auto-saved editing',
   },
   editions: DEFAULT_BIRTHDAY_EDITIONS,
-  // Brief §7 & §12: Keep hidden from public visitors until verified testimonials are supplied/enabled in Admin
-  verifiedTestimonials: [],
+  verifiedTestimonials: [...PORTABLE_BIRTHDAY_STORIES],
 };
 
 // ============================================================================
@@ -933,7 +933,7 @@ export function mergeBirthdayInteractiveConfig(
     return DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG;
   }
 
-  const verifiedTestimonials = Array.isArray(parsed.verifiedTestimonials)
+  const parsedVerified = Array.isArray(parsed.verifiedTestimonials)
     ? parsed.verifiedTestimonials.filter(
         (t): t is VerifiedTestimonial =>
           Boolean(t) &&
@@ -943,7 +943,15 @@ export function mergeBirthdayInteractiveConfig(
           t.feedback.trim().length > 0 &&
           t.verifiedPermission === true
       )
-    : DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG.verifiedTestimonials;
+    : null;
+
+  const explicitlyCleared = parsed.testimonialsExplicitlyCleared === true;
+  const verifiedTestimonials =
+    parsedVerified === null
+      ? [...PORTABLE_BIRTHDAY_STORIES]
+      : parsedVerified.length === 0 && !explicitlyCleared
+      ? [...PORTABLE_BIRTHDAY_STORIES]
+      : parsedVerified;
 
   const ghMarket: BirthdayMarketPricingConfig = {
     ...DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG.markets.gh,
@@ -970,6 +978,7 @@ export function mergeBirthdayInteractiveConfig(
     },
     editions: DEFAULT_BIRTHDAY_EDITIONS,
     verifiedTestimonials,
+    testimonialsExplicitlyCleared: explicitlyCleared,
   };
 }
 

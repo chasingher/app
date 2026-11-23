@@ -33,6 +33,8 @@ export default defineConfig(() => {
           start_url: '/',
           scope: '/',
           orientation: 'portrait-primary',
+          prefer_related_applications: false,
+          categories: ['lifestyle', 'social'],
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -78,6 +80,9 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          clientsClaim: true,
+          skipWaiting: true,
+          cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           runtimeCaching: [
@@ -127,7 +132,7 @@ export default defineConfig(() => {
         },
         devOptions: {
           enabled: true,
-          type: 'module',
+          type: 'classic',
         },
       }),
       // Generates actual static directory entrypoints in dist/<dir>/index.html
