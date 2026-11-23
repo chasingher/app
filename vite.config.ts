@@ -151,9 +151,33 @@ export default defineConfig(() => {
             { dir: 'win-her-back', title: 'Chasing Her — Win Her Back' },
             { dir: 'win-her-back/gh', title: 'Chasing Her — Win Her Back (Ghana)' },
             { dir: 'win-her-back/ke', title: 'Chasing Her — Win Her Back (Kenya)' },
+            {
+              dir: 'win-her-back-interactive',
+              title: 'Chasing Her — Interactive Digital Love Experience',
+            },
+            {
+              dir: 'win-her-back-interactive/gh',
+              title: 'Chasing Her — Interactive Digital Love Experience (Ghana)',
+            },
+            {
+              dir: 'win-her-back-interactive/ke',
+              title: 'Chasing Her — Interactive Digital Love Experience (Kenya)',
+            },
             { dir: 'birthday', title: 'Chasing Her — Birthday Love Website' },
             { dir: 'birthday/gh', title: 'Chasing Her — Birthday Love Website (Ghana)' },
             { dir: 'birthday/ke', title: 'Chasing Her — Birthday Love Website (Kenya)' },
+            {
+              dir: 'birthday-interactive',
+              title: 'Chasing Her — Digital Birthday Keepsake Questionnaire',
+            },
+            {
+              dir: 'birthday-interactive/gh',
+              title: 'Chasing Her — Digital Birthday Keepsake (Ghana)',
+            },
+            {
+              dir: 'birthday-interactive/ke',
+              title: 'Chasing Her — Digital Birthday Keepsake (Kenya)',
+            },
             { dir: 'my-site', title: 'My Site — Chasing Her Customer Portal' },
             { dir: 'builder', title: 'Site Builder Studio — Chasing Her' },
             { dir: 'admin', title: 'Admin Backstage — Chasing Her' },

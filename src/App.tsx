@@ -52,13 +52,36 @@ import {
   deleteProjectFromFirestore,
   subscribeToFirebaseAuth,
   subscribeToFirestoreWorkspace,
+  fetchFunnelSessionsFromFirestore,
+  deleteFunnelSessionFromFirestore,
 } from './utils/firebaseClient';
+import {
+  FunnelSessionRecord,
+  FUNNEL_SESSIONS_STORAGE_KEY,
+  loadLocalFunnelSessions,
+  mergeFunnelSessions,
+  removeLocalFunnelSession,
+} from './utils/funnelTracking';
 import { OrderLandingView } from './components/OrderLandingView';
+import { InteractiveWinHerBackExperience } from './components/InteractiveWinHerBackExperience';
+import { InteractiveBirthdayExperience } from './components/InteractiveBirthdayExperience';
 import { CustomerMySiteView } from './components/CustomerMySiteView';
 import { SiteBuilderStudio } from './components/SiteBuilderStudio';
 import { UnifiedAdminBackstageView } from './components/UnifiedAdminBackstageView';
 import { RecipientSitePreview } from './components/RecipientSitePreview';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallPrompt';
+import {
+  INTERACTIVE_CONFIG_SETTING_KEY,
+  InteractiveSalesConfig,
+  mergeInteractiveSalesConfig,
+  serializeInteractiveSalesConfig,
+} from './utils/interactiveSalesConfig';
+import {
+  BIRTHDAY_INTERACTIVE_SETTING_KEY,
+  BirthdayInteractiveConfig,
+  mergeBirthdayInteractiveConfig,
+  serializeBirthdayInteractiveConfig,
+} from './utils/birthdayInteractiveConfig';
 
 const BASE_URL = import.meta.env.BASE_URL || '/';
 
@@ -95,7 +118,27 @@ export function App() {
       return mergeSiteExperiences(null);
     }
   });
+  const [interactiveSalesConfig, setInteractiveSalesConfig] = useState<InteractiveSalesConfig>(() => {
+    try {
+      return mergeInteractiveSalesConfig(localStorage.getItem(INTERACTIVE_CONFIG_SETTING_KEY));
+    } catch {
+      return mergeInteractiveSalesConfig(null);
+    }
+  });
+  const [birthdayInteractiveConfig, setBirthdayInteractiveConfig] =
+    useState<BirthdayInteractiveConfig>(() => {
+      try {
+        return mergeBirthdayInteractiveConfig(
+          localStorage.getItem(BIRTHDAY_INTERACTIVE_SETTING_KEY)
+        );
+      } catch {
+        return mergeBirthdayInteractiveConfig(null);
+      }
+    });
   const [testimonials, setTestimonials] = useState<TestimonialItem[]>(INITIAL_TESTIMONIALS);
+  const [funnelSessions, setFunnelSessions] = useState<FunnelSessionRecord[]>(() =>
+    loadLocalFunnelSessions()
+  );
   const [settingsMap, setSettingsMap] = useState<Record<string, string>>({
     price_page: '50 GHC',
     price_was: '200 GHC',
@@ -253,6 +296,34 @@ export function App() {
               // ignore storage errors
             }
           }
+          if (remoteSettings[INTERACTIVE_CONFIG_SETTING_KEY]) {
+            const hydratedInteractive = mergeInteractiveSalesConfig(
+              remoteSettings[INTERACTIVE_CONFIG_SETTING_KEY]
+            );
+            setInteractiveSalesConfig(hydratedInteractive);
+            try {
+              localStorage.setItem(
+                INTERACTIVE_CONFIG_SETTING_KEY,
+                serializeInteractiveSalesConfig(hydratedInteractive)
+              );
+            } catch {
+              // ignore storage errors
+            }
+          }
+          if (remoteSettings[BIRTHDAY_INTERACTIVE_SETTING_KEY]) {
+            const hydratedBirthday = mergeBirthdayInteractiveConfig(
+              remoteSettings[BIRTHDAY_INTERACTIVE_SETTING_KEY]
+            );
+            setBirthdayInteractiveConfig(hydratedBirthday);
+            try {
+              localStorage.setItem(
+                BIRTHDAY_INTERACTIVE_SETTING_KEY,
+                serializeBirthdayInteractiveConfig(hydratedBirthday)
+              );
+            } catch {
+              // ignore storage errors
+            }
+          }
         }
       } catch {
         // Offline-first fallback already active
@@ -260,6 +331,25 @@ export function App() {
     })();
     return () => {
       mounted = false;
+    };
+  }, []);
+
+  // Keep local funnel sessions live-synced across route transitions and tabs
+  useEffect(() => {
+    const syncLocalSessions = () => {
+      const local = loadLocalFunnelSessions();
+      setFunnelSessions((prev) => mergeFunnelSessions(prev, local));
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === FUNNEL_SESSIONS_STORAGE_KEY) {
+        syncLocalSessions();
+      }
+    };
+    window.addEventListener('chasingher:funnel-sessions-updated', syncLocalSessions);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('chasingher:funnel-sessions-updated', syncLocalSessions);
+      window.removeEventListener('storage', onStorage);
     };
   }, []);
 
@@ -299,6 +389,26 @@ export function App() {
           const hydrated = mergeSiteExperiences(remoteSettings[SITE_EXPERIENCES_SETTING_KEY]);
           setSiteExperiences(hydrated);
         }
+        if (remoteSettings[INTERACTIVE_CONFIG_SETTING_KEY]) {
+          const hydratedInteractive = mergeInteractiveSalesConfig(
+            remoteSettings[INTERACTIVE_CONFIG_SETTING_KEY]
+          );
+          setInteractiveSalesConfig(hydratedInteractive);
+        }
+        if (remoteSettings[BIRTHDAY_INTERACTIVE_SETTING_KEY]) {
+          const hydratedBirthday = mergeBirthdayInteractiveConfig(
+            remoteSettings[BIRTHDAY_INTERACTIVE_SETTING_KEY]
+          );
+          setBirthdayInteractiveConfig(hydratedBirthday);
+        }
+      },
+      onFunnelSessions: (remoteSessions) => {
+        setFunnelSessions((prev) =>
+          mergeFunnelSessions(
+            mergeFunnelSessions(prev, loadLocalFunnelSessions()),
+            remoteSessions
+          )
+        );
       },
     });
   }, [firebaseUser]);
@@ -337,6 +447,50 @@ export function App() {
     try {
       await savePlatformSettingsToFirestore({
         [SITE_EXPERIENCES_SETTING_KEY]: serialized,
+      });
+    } catch {
+      // local persistence already saved
+    }
+  };
+
+  const handleUpdateInteractiveSalesConfig = async (next: InteractiveSalesConfig) => {
+    setInteractiveSalesConfig(next);
+    const serialized = serializeInteractiveSalesConfig(next);
+    try {
+      localStorage.setItem(INTERACTIVE_CONFIG_SETTING_KEY, serialized);
+    } catch {
+      // ignore storage quota errors
+    }
+    setSettingsMap((prev) => ({
+      ...prev,
+      [INTERACTIVE_CONFIG_SETTING_KEY]: serialized,
+    }));
+    try {
+      await savePlatformSettingsToFirestore({
+        [INTERACTIVE_CONFIG_SETTING_KEY]: serialized,
+      });
+    } catch {
+      // local persistence already saved
+    }
+  };
+
+  const handleUpdateBirthdayInteractiveConfig = async (
+    next: BirthdayInteractiveConfig
+  ) => {
+    setBirthdayInteractiveConfig(next);
+    const serialized = serializeBirthdayInteractiveConfig(next);
+    try {
+      localStorage.setItem(BIRTHDAY_INTERACTIVE_SETTING_KEY, serialized);
+    } catch {
+      // ignore storage quota errors
+    }
+    setSettingsMap((prev) => ({
+      ...prev,
+      [BIRTHDAY_INTERACTIVE_SETTING_KEY]: serialized,
+    }));
+    try {
+      await savePlatformSettingsToFirestore({
+        [BIRTHDAY_INTERACTIVE_SETTING_KEY]: serialized,
       });
     } catch {
       // local persistence already saved
@@ -462,6 +616,22 @@ export function App() {
   const handleAdminCreateOrder = (newOrder: SubmissionOrder) => {
     setOrders((prev) => [newOrder, ...prev]);
     void saveOrderToFirestore(newOrder).catch(() => {});
+  };
+
+  const handleDeleteFunnelSession = (sessionId: string) => {
+    removeLocalFunnelSession(sessionId);
+    setFunnelSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    void deleteFunnelSessionFromFirestore(sessionId).catch(() => {});
+  };
+
+  const handleRefreshFunnelSessions = async () => {
+    const local = loadLocalFunnelSessions();
+    try {
+      const remote = await fetchFunnelSessionsFromFirestore();
+      setFunnelSessions(mergeFunnelSessions(local, remote));
+    } catch {
+      setFunnelSessions(local);
+    }
   };
 
   const handleMarkPaymentReturned = (orderId: string) => {
@@ -614,10 +784,38 @@ export function App() {
 
       {/* Main View Viewport */}
       <main className="flex-1">
-        {activeView === 'order' && (
+        {activeView === 'order' && salesCampaign === 'reconcile-interactive' && (
+          <InteractiveWinHerBackExperience
+            country={country}
+            config={interactiveSalesConfig}
+            chasingHerDemo={curatedChasingHerDemo}
+            memoriesDemo={curatedMemoriesDemo}
+            isPreviewMode={
+              typeof window !== 'undefined' &&
+              new URLSearchParams(window.location.search).get('preview') === '1'
+            }
+          />
+        )}
+
+        {activeView === 'order' && salesCampaign === 'birthday-interactive' && (
+          <InteractiveBirthdayExperience
+            country={country}
+            config={birthdayInteractiveConfig}
+            chasingHerDemo={curatedChasingHerDemo}
+            memoriesDemo={curatedMemoriesDemo}
+            isPreviewMode={
+              typeof window !== 'undefined' &&
+              new URLSearchParams(window.location.search).get('preview') === '1'
+            }
+          />
+        )}
+
+        {activeView === 'order' &&
+          salesCampaign !== 'reconcile-interactive' &&
+          salesCampaign !== 'birthday-interactive' && (
           <OrderLandingView
             country={country}
-            campaign={salesCampaign}
+            campaign={salesCampaign === 'birthday' ? 'birthday' : 'reconcile'}
             onChangeCountry={(nextCountry) =>
               navigateToRoute({ view: 'order', country: nextCountry })
             }
@@ -732,8 +930,15 @@ export function App() {
             onUpdateShowcaseMedia={setShowcaseMedia}
             siteExperiences={siteExperiences}
             onUpdateSiteExperiences={handleUpdateSiteExperiences}
+            interactiveSalesConfig={interactiveSalesConfig}
+            onUpdateInteractiveSalesConfig={handleUpdateInteractiveSalesConfig}
+            birthdayInteractiveConfig={birthdayInteractiveConfig}
+            onUpdateBirthdayInteractiveConfig={handleUpdateBirthdayInteractiveConfig}
             testimonials={testimonials}
             onUpdateTestimonials={setTestimonials}
+            funnelSessions={funnelSessions}
+            onDeleteFunnelSession={handleDeleteFunnelSession}
+            onRefreshFunnelSessions={handleRefreshFunnelSessions}
             onNavigateView={(target) => navigateToRoute(target)}
             firebaseUser={firebaseUser}
             autoUnlock={autoStart}

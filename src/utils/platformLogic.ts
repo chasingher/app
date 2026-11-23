@@ -88,7 +88,11 @@ export const COUNTRIES: Record<CountryCode, CountryConfig> = {
 
 export type ActiveCountryCode = 'gh' | 'ke';
 export type AppView = 'order' | 'builder' | 'my-site' | 'admin' | 'preview';
-export type SalesCampaignId = 'reconcile' | 'birthday';
+export type SalesCampaignId =
+  | 'reconcile'
+  | 'birthday'
+  | 'reconcile-interactive'
+  | 'birthday-interactive';
 
 export interface ResolvedAppRoute {
   view: AppView;
@@ -149,6 +153,46 @@ export const SALES_PAGE_DIRECTORY: readonly SalesPageDirectoryEntry[] = [
     headlinePreview: "Give them a birthday gift they'll never forget.",
     audienceSummary: 'Private birthday keepsake love letter website campaign',
     directoryPath: '/birthday/ke/',
+  },
+  {
+    id: 'reconcile-interactive-gh',
+    campaign: 'reconcile-interactive',
+    country: 'gh',
+    campaignName: 'Win Her Back · Interactive Questionnaire',
+    countryName: 'Ghana',
+    headlinePreview: 'Your sorries are no longer enough—and you know that.',
+    audienceSummary: 'Anonymous 6-question interactive sales experience with personalized result & live demo',
+    directoryPath: '/win-her-back-interactive/gh/',
+  },
+  {
+    id: 'reconcile-interactive-ke',
+    campaign: 'reconcile-interactive',
+    country: 'ke',
+    campaignName: 'Win Her Back · Interactive Questionnaire',
+    countryName: 'Kenya',
+    headlinePreview: 'Your sorries are no longer enough—and you know that.',
+    audienceSummary: 'Anonymous 6-question interactive sales experience with personalized result & live demo',
+    directoryPath: '/win-her-back-interactive/ke/',
+  },
+  {
+    id: 'birthday-interactive-gh',
+    campaign: 'birthday-interactive',
+    country: 'gh',
+    campaignName: 'Birthday Gift · Interactive Questionnaire',
+    countryName: 'Ghana',
+    headlinePreview: 'Is Our Digital Love Letter the Best Birthday Gift to Get Your Partner?',
+    audienceSummary: 'Anonymous 6-question birthday gift match experience with sample preview & market pricing',
+    directoryPath: '/birthday-interactive/gh/',
+  },
+  {
+    id: 'birthday-interactive-ke',
+    campaign: 'birthday-interactive',
+    country: 'ke',
+    campaignName: 'Birthday Gift · Interactive Questionnaire',
+    countryName: 'Kenya',
+    headlinePreview: 'Is Our Digital Love Letter the Best Birthday Gift to Get Your Partner?',
+    audienceSummary: 'Anonymous 6-question birthday gift match experience with sample preview & market pricing',
+    directoryPath: '/birthday-interactive/ke/',
   },
 ] as const;
 
@@ -284,6 +328,25 @@ export function resolveSalesCampaignFromLocation(
 ): SalesCampaignId {
   const stripped = stripBasePath(pathname, baseUrl).toLowerCase();
   const segments = stripped.split('/').filter(Boolean);
+  if (
+    segments.some(
+      (seg) =>
+        seg === 'birthday-interactive' ||
+        seg === 'gift-interactive'
+    )
+  ) {
+    return 'birthday-interactive';
+  }
+  if (
+    segments.some(
+      (seg) =>
+        seg === 'win-her-back-interactive' ||
+        seg === 'reconcile-interactive' ||
+        seg === 'interactive'
+    )
+  ) {
+    return 'reconcile-interactive';
+  }
   if (segments.some((seg) => seg === 'birthday' || seg === 'gift')) {
     return 'birthday';
   }
@@ -292,6 +355,19 @@ export function resolveSalesCampaignFromLocation(
   }
   const params = new URLSearchParams(search);
   const queryCampaign = (params.get('campaign') || params.get('page') || '').trim().toLowerCase();
+  if (
+    queryCampaign === 'birthday-interactive' ||
+    queryCampaign === 'gift-interactive'
+  ) {
+    return 'birthday-interactive';
+  }
+  if (
+    queryCampaign === 'reconcile-interactive' ||
+    queryCampaign === 'win-her-back-interactive' ||
+    queryCampaign === 'interactive'
+  ) {
+    return 'reconcile-interactive';
+  }
   if (queryCampaign === 'birthday' || queryCampaign === 'gift' || queryCampaign === '1') {
     return 'birthday';
   }
@@ -326,9 +402,13 @@ export function resolveAppRouteFromLocation(
   }
   if (
     firstSegment === 'birthday' ||
+    firstSegment === 'birthday-interactive' ||
     firstSegment === 'gift' ||
+    firstSegment === 'gift-interactive' ||
     firstSegment === 'win-her-back' ||
+    firstSegment === 'win-her-back-interactive' ||
     firstSegment === 'reconcile' ||
+    firstSegment === 'reconcile-interactive' ||
     firstSegment === 'gh' ||
     firstSegment === 'ke'
   ) {
@@ -366,7 +446,14 @@ export function buildAppRoutePath(
   if (route.view === 'builder') return join('builder/');
   if (route.view === 'preview') return join('preview/');
 
-  const campaignSlug = route.campaign === 'birthday' ? 'birthday' : 'win-her-back';
+  const campaignSlug =
+    route.campaign === 'birthday'
+      ? 'birthday'
+      : route.campaign === 'birthday-interactive'
+      ? 'birthday-interactive'
+      : route.campaign === 'reconcile-interactive'
+      ? 'win-her-back-interactive'
+      : 'win-her-back';
   const countrySlug = route.country === 'ke' ? 'ke' : 'gh';
   return join(`${campaignSlug}/${countrySlug}/`);
 }

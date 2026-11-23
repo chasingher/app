@@ -13,6 +13,7 @@ import {
   getDoc,
   getDocFromServer,
   setDoc,
+  updateDoc,
   deleteDoc,
   collection,
   getDocs,
@@ -43,6 +44,14 @@ import {
 } from './platformLogic';
 import type { SubmissionOrder } from './supabaseAndOci';
 import { compressImageFile } from './imageCompression';
+import {
+  FunnelCampaignId,
+  FunnelQuestionKey,
+  FunnelSessionRecord,
+  FunnelStepId,
+  FUNNEL_STEP_INDEX,
+  sanitizeFunnelSessionForFirestore,
+} from './funnelTracking';
 
 export const FIREBASE_PROJECT_ID = firebaseConfig.projectId || 'gen-lang-client-0322444571';
 export const FIREBASE_DATABASE_ID =
@@ -398,6 +407,7 @@ export function subscribeToFirestoreWorkspace(
     onChasingHerProjects: (projects: Record<string, ChasingHerProjectData>) => void;
     onMemoriesProjects: (projects: Record<string, MemoriesProjectData>) => void;
     onPlatformSettings?: (settings: Record<string, string>) => void;
+    onFunnelSessions?: (sessions: FunnelSessionRecord[]) => void;
     onError?: (message: string) => void;
   }
 ): () => void {
@@ -600,6 +610,30 @@ export function subscribeToFirestoreWorkspace(
         (error) => {
           try {
             handleFirestoreError(error, OperationType.LIST, 'platform_settings');
+          } catch (wrapped) {
+            callbacks.onError?.(wrapped instanceof Error ? wrapped.message : String(wrapped));
+          }
+        }
+      )
+    );
+  }
+
+  if (adminMode && callbacks.onFunnelSessions) {
+    unsubscribers.push(
+      onSnapshot(
+        collection(db, 'funnel_sessions'),
+        (snap) => {
+          const list: FunnelSessionRecord[] = [];
+          snap.forEach((docSnap) => {
+            const parsed = parseFirestoreFunnelSessionDoc(docSnap.id, docSnap.data());
+            if (parsed) list.push(parsed);
+          });
+          list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+          callbacks.onFunnelSessions?.(list);
+        },
+        (error) => {
+          try {
+            handleFirestoreError(error, OperationType.LIST, 'funnel_sessions');
           } catch (wrapped) {
             callbacks.onError?.(wrapped instanceof Error ? wrapped.message : String(wrapped));
           }
@@ -1324,5 +1358,163 @@ export async function lookupCustomerOrdersInFirestore(email: string): Promise<nu
     return snap.size;
   } catch {
     return 0;
+  }
+}
+
+function parseFirestoreFunnelSessionDoc(
+  docId: string,
+  d: Record<string, unknown> | undefined
+): FunnelSessionRecord | null {
+  if (!d) return null;
+  const funnel: FunnelCampaignId =
+    d.funnel === 'birthday-interactive' ? 'birthday-interactive' : 'reconcile-interactive';
+  const country = d.country === 'ke' ? 'ke' : 'gh';
+  const currentStep: FunnelStepId =
+    typeof d.currentStep === 'string' && d.currentStep in FUNNEL_STEP_INDEX
+      ? (d.currentStep as FunnelStepId)
+      : 'intro';
+  const furthestStep: FunnelStepId =
+    typeof d.furthestStep === 'string' && d.furthestStep in FUNNEL_STEP_INDEX
+      ? (d.furthestStep as FunnelStepId)
+      : currentStep;
+  const furthestStepIndex =
+    typeof d.furthestStepIndex === 'number'
+      ? Math.max(0, Math.min(10, Math.round(d.furthestStepIndex)))
+      : FUNNEL_STEP_INDEX[furthestStep];
+
+  const answers: Partial<Record<FunnelQuestionKey, string>> = {};
+  const answerLabels: Partial<Record<FunnelQuestionKey, string>> = {};
+  const qKeys: FunnelQuestionKey[] = ['q1', 'q2', 'q3', 'q4', 'q5', 'q6'];
+
+  if (d.answers && typeof d.answers === 'object') {
+    const rawAnswers = d.answers as Record<string, unknown>;
+    for (const k of qKeys) {
+      if (typeof rawAnswers[k] === 'string' && rawAnswers[k]) {
+        answers[k] = rawAnswers[k] as string;
+      }
+    }
+  }
+  if (d.answerLabels && typeof d.answerLabels === 'object') {
+    const rawLabels = d.answerLabels as Record<string, unknown>;
+    for (const k of qKeys) {
+      if (typeof rawLabels[k] === 'string' && rawLabels[k]) {
+        answerLabels[k] = rawLabels[k] as string;
+      }
+    }
+  }
+
+  return {
+    id: typeof d.id === 'string' ? d.id : docId,
+    funnel,
+    country,
+    currentStep,
+    furthestStep,
+    furthestStepIndex,
+    answeredCount:
+      typeof d.answeredCount === 'number'
+        ? Math.max(0, Math.min(6, Math.round(d.answeredCount)))
+        : Object.keys(answers).length,
+    completedQuiz: Boolean(d.completedQuiz || furthestStepIndex >= FUNNEL_STEP_INDEX.result),
+    answers,
+    answerLabels,
+    resultId: typeof d.resultId === 'string' ? d.resultId : undefined,
+    resultTitle: typeof d.resultTitle === 'string' ? d.resultTitle : undefined,
+    recommendedEdition:
+      d.recommendedEdition === 'chasing-her' ||
+      d.recommendedEdition === 'memories' ||
+      d.recommendedEdition === 'either'
+        ? d.recommendedEdition
+        : undefined,
+    startedAt: toIsoDate(d.createdAt),
+    updatedAt: toIsoDate(d.updatedAt),
+  };
+}
+
+/**
+ * Persists an anonymous visitor questionnaire session to Firestore so the Admin Backstage
+ * can inspect exact Q1-Q6 answers and drop-off points across all traffic.
+ * Uses `setDoc` on first write (create) and `updateDoc` on subsequent writes (update)
+ * so unauthenticated visitors never need read permissions on `funnel_sessions`.
+ */
+export async function upsertFunnelSessionToFirestore(
+  session: FunnelSessionRecord,
+  alreadyCreatedInFirestore: boolean
+): Promise<boolean> {
+  const sanitized = sanitizeFunnelSessionForFirestore(session);
+  const docRef = doc(db, 'funnel_sessions', sanitized.id);
+
+  const mutableFields: Record<string, unknown> = {
+    currentStep: sanitized.currentStep,
+    furthestStep: sanitized.furthestStep,
+    furthestStepIndex: sanitized.furthestStepIndex,
+    answeredCount: sanitized.answeredCount,
+    completedQuiz: sanitized.completedQuiz,
+    answers: sanitized.answers,
+    answerLabels: sanitized.answerLabels,
+    updatedAt: serverTimestamp(),
+  };
+  if (sanitized.resultId) mutableFields.resultId = sanitized.resultId;
+  if (sanitized.resultTitle) mutableFields.resultTitle = sanitized.resultTitle;
+  if (sanitized.recommendedEdition) {
+    mutableFields.recommendedEdition = sanitized.recommendedEdition;
+  }
+
+  try {
+    if (alreadyCreatedInFirestore) {
+      await updateDoc(docRef, mutableFields);
+      return true;
+    }
+    await setDoc(docRef, {
+      id: sanitized.id,
+      funnel: sanitized.funnel,
+      country: sanitized.country,
+      ...mutableFields,
+      createdAt: serverTimestamp(),
+    });
+    return true;
+  } catch {
+    if (alreadyCreatedInFirestore) {
+      try {
+        await setDoc(docRef, {
+          id: sanitized.id,
+          funnel: sanitized.funnel,
+          country: sanitized.country,
+          ...mutableFields,
+          createdAt: serverTimestamp(),
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+}
+
+export async function fetchFunnelSessionsFromFirestore(): Promise<FunnelSessionRecord[]> {
+  const user = auth.currentUser;
+  if (!isVerifiedAdminUser(user)) return [];
+  try {
+    const snap = await getDocs(collection(db, 'funnel_sessions'));
+    const list: FunnelSessionRecord[] = [];
+    snap.forEach((docSnap) => {
+      const parsed = parseFirestoreFunnelSessionDoc(docSnap.id, docSnap.data());
+      if (parsed) list.push(parsed);
+    });
+    return list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteFunnelSessionFromFirestore(sessionId: string): Promise<void> {
+  const user = auth.currentUser;
+  if (!isVerifiedAdminUser(user)) return;
+  const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+  if (!safeId) return;
+  try {
+    await deleteDoc(doc(db, 'funnel_sessions', safeId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `funnel_sessions/${safeId}`);
   }
 }

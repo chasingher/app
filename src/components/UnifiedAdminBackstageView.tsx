@@ -38,6 +38,7 @@ import {
   X,
   Activity,
   Database,
+  BarChart3,
 } from 'lucide-react';
 import {
   COUNTRIES,
@@ -96,6 +97,20 @@ import { SiteBuilderStudio } from './SiteBuilderStudio';
 import { RecipientSitePreview } from './RecipientSitePreview';
 import { AdminOrderInspector, AdminCreateOrderModal } from './AdminOrderInspector';
 import { AdminExperienceShowcaseEditor } from './AdminExperienceShowcaseEditor';
+import { InteractiveSalesAdminPanel } from './InteractiveSalesAdminPanel';
+import { BirthdayInteractiveAdminPanel } from './BirthdayInteractiveAdminPanel';
+import {
+  DEFAULT_INTERACTIVE_SALES_CONFIG,
+  InteractiveSalesConfig,
+  calculateOfferPricing,
+} from '../utils/interactiveSalesConfig';
+import {
+  DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG,
+  BirthdayInteractiveConfig,
+  calculateBirthdayOfferPricing,
+} from '../utils/birthdayInteractiveConfig';
+import { AdminFunnelAnalyticsPanel } from './AdminFunnelAnalyticsPanel';
+import { FunnelSessionRecord } from '../utils/funnelTracking';
 
 interface FirebaseMediaObject {
   id: string;
@@ -149,8 +164,15 @@ interface UnifiedAdminBackstageViewProps {
   onUpdateShowcaseMedia: (media: ShowcaseMediaMap) => void;
   siteExperiences?: SiteExperienceShowcaseMap;
   onUpdateSiteExperiences?: (next: SiteExperienceShowcaseMap) => Promise<void> | void;
+  interactiveSalesConfig?: InteractiveSalesConfig;
+  onUpdateInteractiveSalesConfig?: (next: InteractiveSalesConfig) => Promise<void> | void;
+  birthdayInteractiveConfig?: BirthdayInteractiveConfig;
+  onUpdateBirthdayInteractiveConfig?: (next: BirthdayInteractiveConfig) => Promise<void> | void;
   testimonials: TestimonialItem[];
   onUpdateTestimonials: (items: TestimonialItem[]) => void;
+  funnelSessions?: FunnelSessionRecord[];
+  onDeleteFunnelSession?: (sessionId: string) => void;
+  onRefreshFunnelSessions?: () => Promise<void> | void;
   onNavigateView?: (target: {
     view: AppView;
     campaign?: SalesCampaignId;
@@ -163,6 +185,7 @@ interface UnifiedAdminBackstageViewProps {
 type AdminTab =
   | 'orders'
   | 'sales-pages'
+  | 'analytics'
   | 'studio'
   | 'experiences'
   | 'assets'
@@ -185,6 +208,10 @@ const TAB_TITLES: Record<AdminTab, { title: string; subtitle: string }> = {
   'sales-pages': {
     title: 'Sales Pages Directory',
     subtitle: 'Every live Ghana & Kenya campaign landing page and standalone portal directory.',
+  },
+  analytics: {
+    title: 'Quiz & Drop-Off Analytics',
+    subtitle: 'Track every client questionnaire answer, completion rate, and exact drop-off point across both interactive funnels.',
   },
   studio: {
     title: 'Site Builder Studio',
@@ -232,8 +259,15 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   onUpdateShowcaseMedia,
   siteExperiences = DEFAULT_SITE_EXPERIENCES,
   onUpdateSiteExperiences,
+  interactiveSalesConfig = DEFAULT_INTERACTIVE_SALES_CONFIG,
+  onUpdateInteractiveSalesConfig,
+  birthdayInteractiveConfig = DEFAULT_BIRTHDAY_INTERACTIVE_CONFIG,
+  onUpdateBirthdayInteractiveConfig,
   testimonials,
   onUpdateTestimonials,
+  funnelSessions = [],
+  onDeleteFunnelSession,
+  onRefreshFunnelSessions,
   onNavigateView,
   firebaseUser = null,
   autoUnlock = false,
@@ -1010,6 +1044,12 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
           label: 'Sales Pages',
           icon: Store,
           count: SALES_PAGE_DIRECTORY.length,
+        },
+        {
+          id: 'analytics',
+          label: 'Quiz Analytics',
+          icon: BarChart3,
+          count: funnelSessions.length,
         },
         {
           id: 'studio',
@@ -3147,12 +3187,59 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                           </p>
                           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-0.5 text-xs">
                             <span className="font-mono text-[#E2B96F]/90">{routePath}</span>
-                            <span className="font-mono tabular-nums text-[#FBF3EA]/75">
-                              Page: <strong className="text-[#FBF3EA]">{resolved.pricePage}</strong>
-                            </span>
-                            <span className="font-mono tabular-nums text-[#FBF3EA]/55">
-                              Concierge: {resolved.priceCustom}
-                            </span>
+                            {entry.campaign === 'reconcile-interactive' ? (
+                              (() => {
+                                const ixPricing = calculateOfferPricing(
+                                  interactiveSalesConfig.pricing
+                                );
+                                return (
+                                  <span className="font-mono tabular-nums text-[#FBF3EA]/75">
+                                    Offer:{' '}
+                                    <strong className="text-[#FBF3EA]">
+                                      {ixPricing.formattedFinal}
+                                    </strong>
+                                    {ixPricing.showDiscount
+                                      ? ` (${ixPricing.discountPercent}% off ${ixPricing.formattedRegular})`
+                                      : ''}
+                                  </span>
+                                );
+                              })()
+                            ) : entry.campaign === 'birthday-interactive' ? (
+                              (() => {
+                                const bdayMarket =
+                                  birthdayInteractiveConfig.markets[entry.country] ||
+                                  birthdayInteractiveConfig.markets.gh;
+                                const bdayPricing =
+                                  calculateBirthdayOfferPricing(bdayMarket);
+                                return (
+                                  <>
+                                    <span className="font-mono tabular-nums text-[#FBF3EA]/75">
+                                      Self-Build:{' '}
+                                      <strong className="text-[#FBF3EA]">
+                                        {bdayPricing.formattedSelfBuild}
+                                      </strong>
+                                      {bdayPricing.showPreviousPrice
+                                        ? ` (was ${bdayPricing.formattedPrevious})`
+                                        : ''}
+                                    </span>
+                                    {birthdayInteractiveConfig.checkout.conciergeEnabled && (
+                                      <span className="font-mono tabular-nums text-[#FBF3EA]/55">
+                                        Concierge: {bdayPricing.formattedConcierge}
+                                      </span>
+                                    )}
+                                  </>
+                                );
+                              })()
+                            ) : (
+                              <>
+                                <span className="font-mono tabular-nums text-[#FBF3EA]/75">
+                                  Page: <strong className="text-[#FBF3EA]">{resolved.pricePage}</strong>
+                                </span>
+                                <span className="font-mono tabular-nums text-[#FBF3EA]/55">
+                                  Concierge: {resolved.priceCustom}
+                                </span>
+                              </>
+                            )}
                           </div>
                         </div>
 
@@ -3213,6 +3300,22 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                   })}
                 </div>
               </div>
+
+              {/* Editable Configuration for Interactive Win Her Back Experience */}
+              <InteractiveSalesAdminPanel
+                config={interactiveSalesConfig}
+                onSaveConfig={(next) => {
+                  void onUpdateInteractiveSalesConfig?.(next);
+                }}
+              />
+
+              {/* Editable Configuration for Interactive Birthday Keepsake */}
+              <BirthdayInteractiveAdminPanel
+                config={birthdayInteractiveConfig}
+                onSaveConfig={(next) => {
+                  void onUpdateBirthdayInteractiveConfig?.(next);
+                }}
+              />
 
               {/* Standalone Portal Directories */}
               <div className="rounded-2xl bg-[#1A060C] border border-[#E2B96F]/20 overflow-hidden">
@@ -3293,6 +3396,18 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
               </div>
             </div>
           )}
+
+          {/* ================================================================
+              TAB: QUIZ & DROP-OFF ANALYTICS
+              ================================================================ */}
+          {activeTab === 'analytics' && (
+            <AdminFunnelAnalyticsPanel
+              sessions={funnelSessions}
+              onDeleteSession={(sessionId) => onDeleteFunnelSession?.(sessionId)}
+              onRefreshSessions={onRefreshFunnelSessions}
+              isAdminSynced={isVerifiedAdminUser(firebaseUser)}
+            />
+          )}
         </div>
       </div>
 
@@ -3331,6 +3446,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
           [
             { id: 'orders' as AdminTab, label: 'Orders', icon: Package },
             { id: 'sales-pages' as AdminTab, label: 'Pages', icon: Store },
+            { id: 'analytics' as AdminTab, label: 'Quiz Data', icon: BarChart3 },
             { id: 'studio' as AdminTab, label: 'Studio', icon: Wand2 },
             { id: 'experiences' as AdminTab, label: 'Features', icon: Sparkles },
             { id: 'assets' as AdminTab, label: 'Music', icon: Music },

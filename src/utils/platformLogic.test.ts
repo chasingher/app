@@ -66,7 +66,7 @@ test('Active storefront markets focus exclusively on Ghana and Kenya with direct
 });
 
 test('Directory routing builds and resolves clean GitHub Pages folder paths without ?view= query params', () => {
-  assert.equal(SALES_PAGE_DIRECTORY.length, 4);
+  assert.equal(SALES_PAGE_DIRECTORY.length, 8);
   assert.equal(APP_PORTAL_DIRECTORY.length, 4);
 
   // Root domain clean directories
@@ -79,12 +79,28 @@ test('Directory routing builds and resolves clean GitHub Pages folder paths with
     '/win-her-back/ke/'
   );
   assert.equal(
+    buildAppRoutePath({ view: 'order', campaign: 'reconcile-interactive', country: 'gh' }, '/'),
+    '/win-her-back-interactive/gh/'
+  );
+  assert.equal(
+    buildAppRoutePath({ view: 'order', campaign: 'reconcile-interactive', country: 'ke' }, '/'),
+    '/win-her-back-interactive/ke/'
+  );
+  assert.equal(
     buildAppRoutePath({ view: 'order', campaign: 'birthday', country: 'gh' }, '/'),
     '/birthday/gh/'
   );
   assert.equal(
     buildAppRoutePath({ view: 'order', campaign: 'birthday', country: 'ke' }, '/'),
     '/birthday/ke/'
+  );
+  assert.equal(
+    buildAppRoutePath({ view: 'order', campaign: 'birthday-interactive', country: 'gh' }, '/'),
+    '/birthday-interactive/gh/'
+  );
+  assert.equal(
+    buildAppRoutePath({ view: 'order', campaign: 'birthday-interactive', country: 'ke' }, '/'),
+    '/birthday-interactive/ke/'
   );
   assert.equal(buildAppRoutePath({ view: 'admin' }, '/'), '/admin/');
   assert.equal(buildAppRoutePath({ view: 'my-site' }, '/'), '/my-site/');
@@ -96,6 +112,20 @@ test('Directory routing builds and resolves clean GitHub Pages folder paths with
     buildAppRoutePath({ view: 'order', campaign: 'birthday', country: 'ke' }, '/chasing-her/'),
     '/chasing-her/birthday/ke/'
   );
+  assert.equal(
+    buildAppRoutePath(
+      { view: 'order', campaign: 'reconcile-interactive', country: 'ke' },
+      '/chasing-her/'
+    ),
+    '/chasing-her/win-her-back-interactive/ke/'
+  );
+  assert.equal(
+    buildAppRoutePath(
+      { view: 'order', campaign: 'birthday-interactive', country: 'gh' },
+      '/chasing-her/'
+    ),
+    '/chasing-her/birthday-interactive/gh/'
+  );
   assert.equal(stripBasePath('/chasing-her/birthday/ke/', '/chasing-her/'), '/birthday/ke/');
 
   // Resolving clean directory paths (root and GitHub Pages subpath)
@@ -104,6 +134,32 @@ test('Directory routing builds and resolves clean GitHub Pages folder paths with
     campaign: 'birthday',
     country: 'ke',
   });
+  assert.deepEqual(resolveAppRouteFromLocation('/birthday-interactive/gh/', '', '/'), {
+    view: 'order',
+    campaign: 'birthday-interactive',
+    country: 'gh',
+  });
+  assert.deepEqual(
+    resolveAppRouteFromLocation('/chasing-her/birthday-interactive/ke/', '', '/chasing-her/'),
+    {
+      view: 'order',
+      campaign: 'birthday-interactive',
+      country: 'ke',
+    }
+  );
+  assert.deepEqual(resolveAppRouteFromLocation('/win-her-back-interactive/gh/', '', '/'), {
+    view: 'order',
+    campaign: 'reconcile-interactive',
+    country: 'gh',
+  });
+  assert.deepEqual(
+    resolveAppRouteFromLocation('/chasing-her/win-her-back-interactive/ke/', '', '/chasing-her/'),
+    {
+      view: 'order',
+      campaign: 'reconcile-interactive',
+      country: 'ke',
+    }
+  );
   assert.deepEqual(
     resolveAppRouteFromLocation('/chasing-her/win-her-back/gh/', '', '/chasing-her/'),
     {

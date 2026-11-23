@@ -231,6 +231,70 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidFunnelStep(step) {
+      return step in ['intro', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'result', 'sample', 'offer', 'checkout_started'];
+    }
+
+    function isValidQuestionMap(m, maxLen) {
+      return m is map &&
+        m.keys().hasOnly(['q1', 'q2', 'q3', 'q4', 'q5', 'q6']) &&
+        (!('q1' in m) || (m.q1 is string && m.q1.size() >= 1 && m.q1.size() <= maxLen)) &&
+        (!('q2' in m) || (m.q2 is string && m.q2.size() >= 1 && m.q2.size() <= maxLen)) &&
+        (!('q3' in m) || (m.q3 is string && m.q3.size() >= 1 && m.q3.size() <= maxLen)) &&
+        (!('q4' in m) || (m.q4 is string && m.q4.size() >= 1 && m.q4.size() <= maxLen)) &&
+        (!('q5' in m) || (m.q5 is string && m.q5.size() >= 1 && m.q5.size() <= maxLen)) &&
+        (!('q6' in m) || (m.q6 is string && m.q6.size() >= 1 && m.q6.size() <= maxLen));
+    }
+
+    function isValidFunnelSession(data) {
+      return data.keys().hasAll([
+          'id',
+          'funnel',
+          'country',
+          'currentStep',
+          'furthestStep',
+          'furthestStepIndex',
+          'answeredCount',
+          'completedQuiz',
+          'answers',
+          'answerLabels',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'funnel',
+          'country',
+          'currentStep',
+          'furthestStep',
+          'furthestStepIndex',
+          'answeredCount',
+          'completedQuiz',
+          'answers',
+          'answerLabels',
+          'resultId',
+          'resultTitle',
+          'recommendedEdition',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.funnel in ['reconcile-interactive', 'birthday-interactive'] &&
+        data.country in ['gh', 'ke'] &&
+        isValidFunnelStep(data.currentStep) &&
+        isValidFunnelStep(data.furthestStep) &&
+        data.furthestStepIndex is int && data.furthestStepIndex >= 0 && data.furthestStepIndex <= 10 &&
+        data.answeredCount is int && data.answeredCount >= 0 && data.answeredCount <= 6 &&
+        data.completedQuiz is bool &&
+        isValidQuestionMap(data.answers, 64) &&
+        isValidQuestionMap(data.answerLabels, 240) &&
+        (!('resultId' in data) || (data.resultId is string && data.resultId.size() >= 1 && data.resultId.size() <= 64)) &&
+        (!('resultTitle' in data) || (data.resultTitle is string && data.resultTitle.size() >= 1 && data.resultTitle.size() <= 200)) &&
+        (!('recommendedEdition' in data) || data.recommendedEdition in ['chasing-her', 'memories', 'either']) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     match /admins/{adminId} {
       allow get: if isVerifiedUser() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
       allow list: if isAdmin();
@@ -368,6 +432,41 @@ service cloud.firestore {
         incoming().key == settingKey &&
         incoming().updatedAt == request.time;
       allow delete: if isAdmin() && isValidId(settingKey);
+    }
+
+    match /funnel_sessions/{sessionId} {
+      allow get: if isAdmin() && isValidId(sessionId);
+      allow list: if isAdmin();
+      allow create: if isValidId(sessionId) &&
+        isValidFunnelSession(incoming()) &&
+        incoming().id == sessionId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(sessionId) &&
+        isValidFunnelSession(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().funnel == existing().funnel &&
+        incoming().country == existing().country &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().furthestStepIndex >= existing().furthestStepIndex &&
+        (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'currentStep',
+            'furthestStep',
+            'furthestStepIndex',
+            'answeredCount',
+            'completedQuiz',
+            'answers',
+            'answerLabels',
+            'resultId',
+            'resultTitle',
+            'recommendedEdition',
+            'updatedAt'
+          ])
+        );
+      allow delete: if isAdmin() && isValidId(sessionId);
     }
   }
 }

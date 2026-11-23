@@ -373,6 +373,88 @@
         }
       },
       "required": ["key", "value", "updatedAt"]
+    },
+    "FunnelSession": {
+      "title": "FunnelSession",
+      "description": "Anonymous interactive questionnaire session tracking Q1-Q6 client answers and exact drop-off step for Admin analytics",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "funnel": {
+          "type": "string",
+          "enum": ["reconcile-interactive", "birthday-interactive"]
+        },
+        "country": {
+          "type": "string",
+          "enum": ["gh", "ke"]
+        },
+        "currentStep": {
+          "type": "string",
+          "enum": ["intro", "q1", "q2", "q3", "q4", "q5", "q6", "result", "sample", "offer", "checkout_started"]
+        },
+        "furthestStep": {
+          "type": "string",
+          "enum": ["intro", "q1", "q2", "q3", "q4", "q5", "q6", "result", "sample", "offer", "checkout_started"]
+        },
+        "furthestStepIndex": {
+          "type": "number"
+        },
+        "answeredCount": {
+          "type": "number"
+        },
+        "completedQuiz": {
+          "type": "boolean"
+        },
+        "answers": {
+          "type": "object",
+          "description": "Native map of q1-q6 to selected option IDs"
+        },
+        "answerLabels": {
+          "type": "object",
+          "description": "Native map of q1-q6 to readable option labels"
+        },
+        "resultId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "resultTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "recommendedEdition": {
+          "type": "string",
+          "enum": ["chasing-her", "memories", "either"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "funnel",
+        "country",
+        "currentStep",
+        "furthestStep",
+        "furthestStepIndex",
+        "answeredCount",
+        "completedQuiz",
+        "answers",
+        "answerLabels",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -411,6 +493,12 @@
         "$ref": "#/entities/PlatformSetting"
       },
       "description": "Global country pricing, checkout links, and asset settings"
+    },
+    "/funnel_sessions/{sessionId}": {
+      "schema": {
+        "$ref": "#/entities/FunnelSession"
+      },
+      "description": "Anonymous visitor questionnaire answers and drop-off stage records readable exclusively by Admin"
     }
   }
 }
