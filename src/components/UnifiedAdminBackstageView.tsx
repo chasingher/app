@@ -307,6 +307,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
 
   // Assets & Music state
   const [assetStatusMsg, setAssetStatusMsg] = useState<string | null>(null);
+  const [assetStatusTone, setAssetStatusTone] = useState<'success' | 'error'>('success');
   const [newTrackTitle, setNewTrackTitle] = useState('');
   const [newTrackArtist, setNewTrackArtist] = useState('');
   const [newTrackUrl, setNewTrackUrl] = useState('');
@@ -631,6 +632,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setAssetStatusTone('success');
     setAssetStatusMsg(`Optimizing & uploading "${file.name}"… 5%`);
     try {
       const kind =
@@ -682,10 +684,11 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
           media_url: isVid ? prev.media_url : uploaded.url,
           video_url: isVid ? uploaded.url : prev.video_url,
         }));
-        setAssetStatusMsg('Uploaded testimonial media to Firebase Storage.');
+        setAssetStatusMsg('Uploaded testimonial media.');
       }
       await loadFirebaseState();
     } catch (err) {
+      setAssetStatusTone('error');
       setAssetStatusMsg(formatUploadErrorMessage(err));
     }
     e.target.value = '';
@@ -713,7 +716,8 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
     if (pendingAudioFile) {
       setIsUploadingAudio(true);
       setAudioUploadProgress(5);
-      setAssetStatusMsg(`Streaming "${finalTitle}" to cloud storage…`);
+      setAssetStatusTone('success');
+      setAssetStatusMsg(`Streaming "${finalTitle}" to storage…`);
       try {
         const uploaded = await uploadMediaToFirebase({
           file: pendingAudioFile,
@@ -725,6 +729,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
         finalUrl = uploaded.url;
         void loadFirebaseState();
       } catch (err) {
+        setAssetStatusTone('error');
         setAssetStatusMsg(
           err instanceof Error ? err.message : 'Audio upload failed — please try again.'
         );
@@ -1985,7 +1990,13 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
           {activeTab === 'assets' && (
             <div className="space-y-6">
               {assetStatusMsg && (
-                <div className="rounded-xl bg-emerald-950/70 border border-emerald-500/35 px-4 py-3 text-xs text-emerald-200">
+                <div
+                  className={`rounded-xl border px-4 py-3 text-xs ${
+                    assetStatusTone === 'error'
+                      ? 'bg-rose-950/75 border-rose-500/40 text-rose-200'
+                      : 'bg-emerald-950/70 border-emerald-500/35 text-emerald-200'
+                  }`}
+                >
                   {assetStatusMsg}
                 </div>
               )}

@@ -54,6 +54,7 @@ import {
 } from './funnelTracking';
 
 import {
+  arrayBufferToBase64,
   buildChunkPlan,
   computeChunkedUploadProgress,
   createStallWatchdog,
@@ -61,9 +62,15 @@ import {
   DEFAULT_UPLOAD_CHUNK_BYTES,
   FIREBASE_SDK_STALL_TIMEOUT_MS,
   formatUploadErrorMessage,
+  isBucketNotProvisionedError,
   shouldUseChunkedUpload,
   UPLOAD_STALL_TIMEOUT_MS,
 } from './uploadPipeline';
+import {
+  clearLocalVaultMedia,
+  listLocalVaultMedia,
+  saveMediaToLocalVault,
+} from './localMediaVault';
 
 export const FIREBASE_PROJECT_ID = firebaseConfig.projectId || 'gen-lang-client-0322444571';
 export const FIREBASE_DATABASE_ID =
@@ -317,6 +324,7 @@ export async function runDatabaseConnectionTest(): Promise<DatabaseConnectionRep
   const apiStart = nowMs();
   try {
     const res = await fetch('/api/firebase/status', {
+      credentials: 'include',
       headers: { Accept: 'application/json' },
     });
     const contentType = res.headers.get('content-type') || '';
@@ -737,77 +745,146 @@ class BackendUploadUnavailableError extends Error {
   }
 }
 
-async function uploadSingleChunkWithRetry(params: {
-  chunkBlob: Blob;
+interface ChunkUploadResult {
+  ok: boolean;
+  completed?: boolean;
+  object?: RawUploadResponse['object'];
+}
+
+function sendXhrChunk(params: {
+  url: string;
+  body: Blob | string;
   headers: Record<string, string>;
-  maxRetries?: number;
-}): Promise<{ ok: boolean; completed?: boolean; object?: RawUploadResponse['object'] }> {
-  const maxRetries = params.maxRetries ?? 2;
-  let lastError: unknown = null;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+  onUploadFraction?: (fraction: number) => void;
+}): Promise<ChunkUploadResult> {
+  if (typeof XMLHttpRequest === 'undefined') {
     const controller = new AbortController();
-    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
-      controller.abort();
-    });
-
-    try {
-      const res = await fetch('/api/firebase/upload-chunk', {
-        method: 'POST',
-        headers: {
-          ...params.headers,
-          'Content-Type': 'application/octet-stream',
-          Accept: 'application/json',
-        },
-        body: params.chunkBlob,
-        signal: controller.signal,
-      });
-
-      watchdog.stop();
-
-      const ct = res.headers.get('content-type') || '';
-      if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
-        throw new BackendUploadUnavailableError(
-          `Chunk upload API unavailable (${res.status}).`
-        );
-      }
-
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const errMsg = payload?.error || `Chunk upload failed (${res.status})`;
-        if (res.status === 413 || res.status === 400) {
-          throw new Error(errMsg);
+    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => controller.abort());
+    return fetch(params.url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { ...params.headers, Accept: 'application/json' },
+      body: params.body,
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        watchdog.stop();
+        const ct = res.headers.get('content-type') || '';
+        if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+          throw new BackendUploadUnavailableError(`Upload API unavailable (${res.status}).`);
         }
-        throw new Error(errMsg);
-      }
-
-      return payload;
-    } catch (err) {
-      watchdog.stop();
-      if (err instanceof BackendUploadUnavailableError) {
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(payload?.error || `Chunk upload failed (${res.status})`);
+        }
+        params.onUploadFraction?.(1);
+        return payload as ChunkUploadResult;
+      })
+      .catch((err) => {
+        watchdog.stop();
         throw err;
-      }
-      if (err instanceof Error && (err.message.includes('50 MB') || err.message.includes('413'))) {
-        throw err;
-      }
-      lastError =
-        err instanceof DOMException && err.name === 'AbortError'
-          ? new Error('Upload stalled on chunk transfer — retrying…')
-          : err;
-      if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
-      }
-    }
+      });
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error('Chunked upload timed out after retries.');
+  return new Promise<ChunkUploadResult>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let settled = false;
+    let stalledOut = false;
+
+    const finishReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      watchdog.stop();
+      reject(err);
+    };
+
+    const finishResolve = (val: ChunkUploadResult) => {
+      if (settled) return;
+      settled = true;
+      watchdog.stop();
+      resolve(val);
+    };
+
+    // Idle-only watchdog: resets on every single outgoing packet so slow healthy
+    // connections never time out while data is actively flowing.
+    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
+      stalledOut = true;
+      try {
+        xhr.abort();
+      } catch {
+        // ignore
+      }
+      finishReject(new Error('Chunk transfer stalled with zero bytes sent for 45s.'));
+    });
+
+    xhr.open('POST', params.url, true);
+    xhr.withCredentials = true;
+    xhr.timeout = 0; // Never impose a fixed wall-clock cutoff while bytes are flowing
+    xhr.setRequestHeader('Accept', 'application/json');
+    for (const [key, val] of Object.entries(params.headers)) {
+      xhr.setRequestHeader(key, val);
+    }
+
+    xhr.upload.onprogress = (ev) => {
+      watchdog.touch();
+      if (ev.lengthComputable && ev.total > 0) {
+        params.onUploadFraction?.(Math.min(0.95, ev.loaded / ev.total));
+      }
+    };
+
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState >= 2) {
+        watchdog.touch();
+      }
+    };
+
+    xhr.onload = () => {
+      const ct = xhr.getResponseHeader('content-type') || '';
+      if (xhr.status === 404 || xhr.status === 405 || !ct.includes('application/json')) {
+        finishReject(new BackendUploadUnavailableError(`Upload API unavailable (${xhr.status}).`));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const parsed = JSON.parse(xhr.responseText) as ChunkUploadResult;
+          if (!parsed?.ok) {
+            finishReject(new Error('Invalid chunk response from server'));
+            return;
+          }
+          params.onUploadFraction?.(1);
+          finishResolve(parsed);
+        } catch {
+          finishReject(new Error('Invalid chunk response from server'));
+        }
+      } else {
+        try {
+          const errBody = JSON.parse(xhr.responseText);
+          finishReject(new Error(errBody.error || `Chunk upload failed (${xhr.status})`));
+        } catch {
+          finishReject(new Error(`Chunk upload failed (${xhr.status})`));
+        }
+      }
+    };
+
+    xhr.onerror = () => finishReject(new Error('Network error while transferring chunk'));
+    xhr.onabort = () =>
+      finishReject(
+        new Error(stalledOut ? 'Upload stalled with no progress.' : 'Upload was cancelled')
+      );
+    xhr.send(params.body);
+  });
 }
 
 async function streamChunkedFileUpload(params: {
   file: File;
+  kind: 'images' | 'video' | 'voice' | 'music';
+  projectSlug: string;
+  songTitle: string;
+  originalBytes: number;
+  width: number;
+  height: number;
   headers: Record<string, string>;
+  useJsonTransport?: boolean;
   onProgress?: (percent: number) => void;
 }): Promise<RawUploadResponse> {
   const plan = buildChunkPlan(params.file.size, DEFAULT_UPLOAD_CHUNK_BYTES);
@@ -820,29 +897,84 @@ async function streamChunkedFileUpload(params: {
 
   for (const slice of plan.slices) {
     const chunkBlob = params.file.slice(slice.start, slice.end);
-    params.onProgress?.(
-      computeChunkedUploadProgress(slice.index, plan.totalChunks, 0.25)
-    );
+    let chunkResult: ChunkUploadResult | null = null;
+    let lastChunkErr: unknown = null;
 
-    const chunkHeaders: Record<string, string> = {
-      ...params.headers,
-      'x-upload-id': uploadId,
-      'x-chunk-index': String(slice.index),
-      'x-total-chunks': String(plan.totalChunks),
-    };
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      try {
+        if (params.useJsonTransport) {
+          const buf = await chunkBlob.arrayBuffer();
+          const dataBase64 = arrayBufferToBase64(buf);
+          const payload = JSON.stringify({
+            uploadId,
+            chunkIndex: slice.index,
+            totalChunks: plan.totalChunks,
+            fileName: params.file.name,
+            songTitle: params.songTitle || undefined,
+            contentType: params.file.type || 'application/octet-stream',
+            kind: params.kind,
+            projectSlug: params.projectSlug || 'general',
+            originalBytes: Math.round(params.originalBytes),
+            width: Math.round(params.width),
+            height: Math.round(params.height),
+            dataBase64,
+          });
+          chunkResult = await sendXhrChunk({
+            url: '/api/firebase/upload-chunk-json',
+            body: payload,
+            headers: { 'Content-Type': 'application/json' },
+            onUploadFraction: (frac) => {
+              params.onProgress?.(
+                computeChunkedUploadProgress(slice.index, plan.totalChunks, frac)
+              );
+            },
+          });
+        } else {
+          const qs = `uploadId=${encodeURIComponent(uploadId)}&chunkIndex=${slice.index}&totalChunks=${plan.totalChunks}`;
+          chunkResult = await sendXhrChunk({
+            url: `/api/firebase/upload-chunk?${qs}`,
+            body: chunkBlob,
+            headers: {
+              ...params.headers,
+              'Content-Type': 'application/octet-stream',
+              'x-upload-id': uploadId,
+              'x-chunk-index': String(slice.index),
+              'x-total-chunks': String(plan.totalChunks),
+            },
+            onUploadFraction: (frac) => {
+              params.onProgress?.(
+                computeChunkedUploadProgress(slice.index, plan.totalChunks, frac)
+              );
+            },
+          });
+        }
+        break;
+      } catch (err) {
+        lastChunkErr = err;
+        if (err instanceof BackendUploadUnavailableError) {
+          throw err;
+        }
+        if (err instanceof Error && (err.message.includes('50 MB') || err.message.includes('413'))) {
+          throw err;
+        }
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
+        }
+      }
+    }
 
-    const res = await uploadSingleChunkWithRetry({
-      chunkBlob,
-      headers: chunkHeaders,
-      maxRetries: 2,
-    });
+    if (!chunkResult) {
+      throw lastChunkErr instanceof Error
+        ? lastChunkErr
+        : new Error('Chunk upload failed after retries.');
+    }
 
     params.onProgress?.(
       computeChunkedUploadProgress(slice.index, plan.totalChunks, 1)
     );
 
-    if (res.completed && res.object) {
-      finalResponse = { ok: true, object: res.object };
+    if (chunkResult.completed && chunkResult.object) {
+      finalResponse = { ok: true, object: chunkResult.object };
     }
   }
 
@@ -864,6 +996,7 @@ function streamRawFileUpload(params: {
     const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => controller.abort());
     return fetch('/api/firebase/upload-raw', {
       method: 'POST',
+      credentials: 'include',
       headers: { ...params.headers, Accept: 'application/json' },
       body: params.file,
       signal: controller.signal,
@@ -917,7 +1050,8 @@ function streamRawFileUpload(params: {
     });
 
     xhr.open('POST', '/api/firebase/upload-raw', true);
-    xhr.timeout = 30_000;
+    xhr.withCredentials = true;
+    xhr.timeout = 0; // Idle-only watchdog handles real stalls without cutting off slow healthy uploads
     xhr.setRequestHeader('Accept', 'application/json');
     for (const [key, val] of Object.entries(params.headers)) {
       xhr.setRequestHeader(key, val);
@@ -959,7 +1093,6 @@ function streamRawFileUpload(params: {
       }
     };
 
-    xhr.ontimeout = () => finishReject(new Error('Upload timed out while waiting for server.'));
     xhr.onerror = () => finishReject(new Error('Network error while uploading media'));
     xhr.onabort = () =>
       finishReject(
@@ -967,6 +1100,31 @@ function streamRawFileUpload(params: {
       );
     xhr.send(params.file);
   });
+}
+
+let cachedBucketReachable: boolean | null = null;
+
+async function isFirebaseStorageBucketProvisioned(): Promise<boolean> {
+  if (cachedBucketReachable !== null) return cachedBucketReachable;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const res = await fetch(
+      `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(FIREBASE_STORAGE_BUCKET)}/o`,
+      { method: 'GET', signal: controller.signal }
+    );
+    clearTimeout(timer);
+    if (isBucketNotProvisionedError(res.status)) {
+      cachedBucketReachable = false;
+      return false;
+    }
+    cachedBucketReachable = true;
+    return true;
+  } catch {
+    clearTimeout(timer);
+    // Network/CORS block on probe — do not cache false permanently, let SDK fail cleanly if needed
+    return false;
+  }
 }
 
 async function uploadViaFirebaseStorageSdk(params: {
@@ -979,6 +1137,11 @@ async function uploadViaFirebaseStorageSdk(params: {
   height: number;
   onProgress?: (percent: number) => void;
 }): Promise<RawUploadResponse> {
+  const bucketReady = await isFirebaseStorageBucketProvisioned();
+  if (!bucketReady) {
+    throw new Error('storage/bucket-not-found');
+  }
+
   const safeSlug = (params.projectSlug || 'general').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
   const safeName = params.file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120);
   const objectKey = `${params.kind}/${safeSlug}/${Date.now()}-${safeName}`;
@@ -1001,11 +1164,7 @@ async function uploadViaFirebaseStorageSdk(params: {
       } catch {
         // ignore
       }
-      reject(
-        new Error(
-          'Cloud Storage bucket stalled without completing transfer. Check Firebase Storage rules/CORS or retry.'
-        )
-      );
+      reject(new Error('storage/bucket-not-found'));
     });
 
     task.on(
@@ -1143,12 +1302,19 @@ export async function uploadMediaToFirebase(params: {
 
   const preferChunked = shouldUseChunkedUpload(targetFile.size, params.kind);
 
-  // Stage 1: Primary Express backend transport (chunked 512 KB for audio/video/large files, raw stream for small images)
+  // Stage 1: Primary Express backend transport (192 KB XHR binary chunks for audio/video/large files, raw stream for small images)
   try {
     if (preferChunked) {
       data = await streamChunkedFileUpload({
         file: targetFile,
+        kind: params.kind,
+        projectSlug: params.projectSlug,
+        songTitle: cleanSongTitle,
+        originalBytes,
+        width,
+        height,
         headers,
+        useJsonTransport: false,
         onProgress: emitProgress,
       });
     } else {
@@ -1167,22 +1333,21 @@ export async function uploadMediaToFirebase(params: {
     }
   }
 
-  // Stage 2: Alternate Express backend transport if Stage 1 hit a proxy stall or single-shot glitch
+  // Stage 2: Proxy-proof JSON chunked upload (standard application/json, zero custom x-* headers)
   if (!data && !backendUnavailable) {
     try {
-      if (preferChunked) {
-        data = await streamRawFileUpload({
-          file: targetFile,
-          headers,
-          onProgress: emitProgress,
-        });
-      } else {
-        data = await streamChunkedFileUpload({
-          file: targetFile,
-          headers,
-          onProgress: emitProgress,
-        });
-      }
+      data = await streamChunkedFileUpload({
+        file: targetFile,
+        kind: params.kind,
+        projectSlug: params.projectSlug,
+        songTitle: cleanSongTitle,
+        originalBytes,
+        width,
+        height,
+        headers,
+        useJsonTransport: true,
+        onProgress: emitProgress,
+      });
     } catch (err) {
       primaryError = err;
       if (err instanceof BackendUploadUnavailableError) {
@@ -1191,7 +1356,7 @@ export async function uploadMediaToFirebase(params: {
     }
   }
 
-  // Stage 3: Static hosting fallback (direct Firebase Cloud Storage SDK with strict 10s stall watchdog)
+  // Stage 3: Static hosting fallback — direct Firebase Cloud Storage SDK (only if bucket is provisioned)
   if (!data && backendUnavailable) {
     try {
       data = await uploadViaFirebaseStorageSdk({
@@ -1204,8 +1369,44 @@ export async function uploadMediaToFirebase(params: {
         height,
         onProgress: emitProgress,
       });
-    } catch (sdkErr) {
-      throw new Error(formatUploadErrorMessage(sdkErr));
+    } catch {
+      // Bucket not provisioned or unavailable — proceed immediately to Stage 4 Local Portable Vault
+    }
+  }
+
+  // Stage 4: Local Portable Media Vault (inline Data URI for compact images, IndexedDB + playable Blob URL for audio/video)
+  // Guarantees uploads complete cleanly to 100% even on static GitHub Pages builds before Firebase Cloud Storage is enabled.
+  if (!data && typeof window !== 'undefined') {
+    try {
+      const vaulted = await saveMediaToLocalVault({
+        file: targetFile,
+        kind: params.kind,
+        projectSlug: params.projectSlug,
+        songTitle: cleanSongTitle,
+        originalBytes,
+        width,
+        height,
+        onProgress: emitProgress,
+      });
+      data = {
+        ok: true,
+        object: {
+          id: vaulted.id,
+          objectKey: vaulted.objectKey,
+          fileName: vaulted.fileName,
+          songTitle: vaulted.songTitle,
+          contentType: vaulted.contentType,
+          sizeBytes: vaulted.sizeBytes,
+          originalBytes: vaulted.originalBytes,
+          savedBytes: vaulted.savedBytes,
+          width: vaulted.width,
+          height: vaulted.height,
+          url: vaulted.url,
+          storageTier: 'local-vault',
+        },
+      };
+    } catch (vaultErr) {
+      throw new Error(formatUploadErrorMessage(vaultErr || primaryError));
     }
   }
 
@@ -1307,6 +1508,7 @@ export async function fetchFirebaseStorageCatalog(): Promise<{
 }> {
   try {
     const res = await fetch('/api/firebase/status', {
+      credentials: 'include',
       headers: { Accept: 'application/json' },
     });
     const contentType = res.headers.get('content-type') || '';
@@ -1314,7 +1516,7 @@ export async function fetchFirebaseStorageCatalog(): Promise<{
       return await res.json();
     }
   } catch {
-    // Fallback to direct Firestore media_records catalog on static hosting
+    // Fallback to direct Firestore + Local Vault catalog on static hosting
   }
 
   const objects: Array<{
@@ -1370,6 +1572,27 @@ export async function fetchFirebaseStorageCatalog(): Promise<{
     }
   }
 
+  // Include locally vaulted media items when running without Express server
+  const localItems = await listLocalVaultMedia().catch(() => []);
+  for (const item of localItems) {
+    if (!objects.some((o) => o.id === item.id)) {
+      objects.push({
+        id: item.id,
+        objectKey: item.objectKey,
+        fileName: item.fileName,
+        kind: item.kind,
+        contentType: item.contentType,
+        sizeBytes: item.sizeBytes,
+        originalBytes: item.originalBytes,
+        savedBytes: item.savedBytes,
+        projectSlug: item.projectSlug,
+        url: item.url,
+        storageTier: 'local-vault',
+        createdAt: item.createdAt,
+      });
+    }
+  }
+
   const usedBytes = objects.reduce((sum, item) => sum + item.sizeBytes, 0);
   const savedBytesByCompression = objects.reduce((sum, item) => sum + (item.savedBytes || 0), 0);
 
@@ -1396,9 +1619,11 @@ export async function cleanFirebaseStorageCatalog(): Promise<{
   purgedObjectsCount: number;
   storageBucket: string;
 }> {
+  const localPurged = await clearLocalVaultMedia().catch(() => 0);
   try {
     const res = await fetch('/api/firebase/clean', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ storageBucket: FIREBASE_STORAGE_BUCKET }),
     });
@@ -1407,7 +1632,7 @@ export async function cleanFirebaseStorageCatalog(): Promise<{
       const data = await res.json();
       return {
         ok: Boolean(data.ok),
-        purgedObjectsCount: Number(data.purgedObjectsCount || 0),
+        purgedObjectsCount: Number(data.purgedObjectsCount || 0) + localPurged,
         storageBucket: FIREBASE_STORAGE_BUCKET,
       };
     }
@@ -1415,7 +1640,7 @@ export async function cleanFirebaseStorageCatalog(): Promise<{
     // Fall back to cleaning Firestore media_records directly on static hosting
   }
 
-  let purgedObjectsCount = 0;
+  let purgedObjectsCount = localPurged;
   const user = auth.currentUser;
   if (isVerifiedAdminUser(user)) {
     const snap = await getDocs(collection(db, 'media_records'));

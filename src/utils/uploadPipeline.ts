@@ -12,14 +12,19 @@ export interface UploadChunkPlan {
   slices: UploadChunkSlice[];
 }
 
-export const DEFAULT_UPLOAD_CHUNK_BYTES = 512 * 1024; // 512 KB per chunk — immune to proxy body buffers & 32 MB limits
-export const CHUNKED_UPLOAD_THRESHOLD_BYTES = 384 * 1024; // Files > 384 KB (or any audio/video) stream via chunked upload
-export const UPLOAD_STALL_TIMEOUT_MS = 18_000; // Abort cleanly if zero bytes move for 18 seconds (never hang forever at 26%)
-export const FIREBASE_SDK_STALL_TIMEOUT_MS = 10_000; // Strict 10s stall cap on direct Firebase Storage SDK fallback
+// 192 KB chunks stream quickly even on 3G/mobile uplinks (Ghana/Kenya -> EU Cloud Run)
+// and remain well below proxy, WAF, and Cloud Run body buffers.
+export const DEFAULT_UPLOAD_CHUNK_BYTES = 192 * 1024;
+export const CHUNKED_UPLOAD_THRESHOLD_BYTES = 256 * 1024;
+// Idle-only stall watchdog: resets on every XHR upload progress packet so slow healthy
+// connections never get falsely killed mid-transfer.
+export const UPLOAD_STALL_TIMEOUT_MS = 45_000;
+export const FIREBASE_SDK_STALL_TIMEOUT_MS = 8_000;
+export const INLINE_DATA_URI_MAX_BYTES = 750 * 1024; // 750 KB max for inline base64 Data URI
 
 /**
- * Decides whether to use chunked binary upload immediately rather than a single-shot request.
- * Audio/video files and any file above 384 KB use chunked upload for smooth progress and
+ * Decides whether to use chunked upload immediately rather than a single-shot request.
+ * Audio/video files and any file above 256 KB use chunked upload for smooth progress and
  * full resilience against reverse-proxy buffering or mid-stream stalls.
  */
 export function shouldUseChunkedUpload(
@@ -155,9 +160,63 @@ export function createUploadSessionId(): string {
 }
 
 /**
- * Formats upload errors into concise, actionable messages for the UI.
+ * Encodes an ArrayBuffer into Base64 cleanly without hitting call-stack limits.
  */
-export function formatUploadErrorMessage(err: unknown, fallback = 'Upload failed — please try again.'): string {
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+    return Buffer.from(bytes).toString('base64');
+  }
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const sub = bytes.subarray(i, Math.min(bytes.length, i + chunkSize));
+    binary += String.fromCharCode(...sub);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Determines whether a fallback local upload should be stored as a portable inline Data URI
+ * (works across reloads & standalone HTML exports) vs IndexedDB + playable Blob URL.
+ */
+export function isInlineDataUriEligible(
+  sizeBytes: number,
+  kind: 'images' | 'video' | 'voice' | 'music'
+): boolean {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return false;
+  if (kind === 'images') {
+    return sizeBytes <= INLINE_DATA_URI_MAX_BYTES;
+  }
+  return sizeBytes <= 350 * 1024;
+}
+
+/**
+ * Detects when Firebase Cloud Storage bucket is unprovisioned / 404 so the client
+ * fails fast in <1s instead of stalling on retries.
+ */
+export function isBucketNotProvisionedError(statusOrMessage: number | string): boolean {
+  if (typeof statusOrMessage === 'number') {
+    return statusOrMessage === 404;
+  }
+  const lower = String(statusOrMessage || '').toLowerCase();
+  return (
+    lower.includes('bucket-not-found') ||
+    lower.includes('bucket does not exist') ||
+    lower.includes('storage/object-not-found') ||
+    lower.includes('not provisioned') ||
+    (lower.includes('404') && lower.includes('not found'))
+  );
+}
+
+/**
+ * Formats upload errors into concise, actionable messages for the UI while preserving
+ * specific causes instead of collapsing unrelated failures into one generic timeout.
+ */
+export function formatUploadErrorMessage(
+  err: unknown,
+  fallback = 'Upload failed — please try again.'
+): string {
   const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
   const msg = raw.trim();
   if (!msg) return fallback;
@@ -166,14 +225,21 @@ export function formatUploadErrorMessage(err: unknown, fallback = 'Upload failed
   if (lower.includes('413') || lower.includes('50 mb') || lower.includes('too large')) {
     return 'File is larger than the 50 MB upload limit. Please use a smaller file.';
   }
-  if (lower.includes('stall') || lower.includes('timed out') || lower.includes('timeout')) {
-    return 'Upload timed out because the network connection stalled. Please retry.';
+  if (isBucketNotProvisionedError(msg)) {
+    return 'Firebase Cloud Storage bucket is not enabled on this project yet. Enable Storage in Firebase Console or use the live Studio server.';
   }
-  if (lower.includes('storage/unauthorized') || lower.includes('storage/unauthenticated') || lower.includes('permission')) {
+  if (
+    lower.includes('storage/unauthorized') ||
+    lower.includes('storage/unauthenticated') ||
+    lower.includes('permission')
+  ) {
     return 'Cloud storage rejected the upload (permissions or CORS). Please sign in as Admin or retry via the studio server.';
   }
   if (lower.includes('storage/retry-limit-exceeded') || lower.includes('storage/canceled')) {
-    return 'Cloud storage bucket did not respond in time. Please check your connection and retry.';
+    return 'Cloud storage bucket did not respond in time. Please check Firebase Storage setup or retry.';
+  }
+  if (lower.includes('stall') || lower.includes('timed out') || lower.includes('timeout')) {
+    return 'Upload timed out because no data transferred for 45 seconds. Please check your internet connection and retry.';
   }
   return msg;
 }

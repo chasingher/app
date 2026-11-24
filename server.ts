@@ -231,16 +231,22 @@ async function startServer() {
     };
   }
 
-  // Rock-solid chunked binary upload (512 KB chunks — immune to reverse-proxy buffering, 32 MB limits, and stream races)
+  // Rock-solid chunked binary upload (192 KB chunks — immune to reverse-proxy buffering, 32 MB limits, and stream races)
   app.post(
     '/api/firebase/upload-chunk',
     express.raw({ type: '*/*', limit: '4mb' }),
     async (req, res) => {
       try {
-        const rawUploadId = decodeHeaderValue(req.headers['x-upload-id'], '');
+        const rawUploadId =
+          decodeHeaderValue(req.headers['x-upload-id'], '') ||
+          String(req.query.uploadId || '');
         const safeUploadId = rawUploadId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
-        const chunkIndex = Number(req.headers['x-chunk-index']);
-        const totalChunks = Number(req.headers['x-total-chunks']);
+        const chunkIndex = Number(
+          req.headers['x-chunk-index'] ?? req.query.chunkIndex
+        );
+        const totalChunks = Number(
+          req.headers['x-total-chunks'] ?? req.query.totalChunks
+        );
 
         if (
           !safeUploadId ||
@@ -248,7 +254,7 @@ async function startServer() {
           !Number.isInteger(totalChunks) ||
           chunkIndex < 0 ||
           totalChunks < 1 ||
-          totalChunks > 200 ||
+          totalChunks > 400 ||
           chunkIndex >= totalChunks
         ) {
           res.status(400).json({ error: 'Invalid chunk upload metadata.' });
@@ -493,6 +499,163 @@ async function startServer() {
   });
 
   app.use(express.json({ limit: '50mb' }));
+
+  // Proxy-proof JSON chunked upload (standard application/json, zero custom x-* headers required)
+  app.post('/api/firebase/upload-chunk-json', async (req, res) => {
+    try {
+      const {
+        uploadId,
+        chunkIndex: rawChunkIndex,
+        totalChunks: rawTotalChunks,
+        fileName,
+        songTitle,
+        contentType,
+        kind,
+        projectSlug,
+        originalBytes,
+        width,
+        height,
+        dataBase64,
+      } = req.body || {};
+
+      const safeUploadId = String(uploadId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+      const chunkIndex = Number(rawChunkIndex);
+      const totalChunks = Number(rawTotalChunks);
+
+      if (
+        !safeUploadId ||
+        !Number.isInteger(chunkIndex) ||
+        !Number.isInteger(totalChunks) ||
+        chunkIndex < 0 ||
+        totalChunks < 1 ||
+        totalChunks > 400 ||
+        chunkIndex >= totalChunks ||
+        typeof dataBase64 !== 'string' ||
+        !dataBase64
+      ) {
+        res.status(400).json({ error: 'Invalid JSON chunk upload payload.' });
+        return;
+      }
+
+      const chunkBuffer = Buffer.from(dataBase64, 'base64');
+      if (chunkBuffer.length === 0) {
+        res.status(400).json({ error: 'Empty upload chunk.' });
+        return;
+      }
+
+      const sessionDir = path.resolve(CHUNK_TEMP_DIR, safeUploadId);
+      if (!sessionDir.startsWith(`${CHUNK_TEMP_DIR}${path.sep}`)) {
+        res.status(400).json({ error: 'Invalid upload session path.' });
+        return;
+      }
+
+      await fs.promises.mkdir(sessionDir, { recursive: true });
+      const chunkPath = path.join(sessionDir, `${String(chunkIndex).padStart(5, '0')}.part`);
+      await fs.promises.writeFile(chunkPath, chunkBuffer);
+
+      if (chunkIndex < totalChunks - 1) {
+        res.json({
+          ok: true,
+          completed: false,
+          chunkIndex,
+          totalChunks,
+          receivedBytes: chunkBuffer.length,
+        });
+        return;
+      }
+
+      const safeSlug =
+        String(projectSlug || 'general')
+          .replace(/[^a-zA-Z0-9_-]/g, '-')
+          .slice(0, 120) || 'general';
+      const safeKind: FirebaseMediaRecord['kind'] = ['images', 'video', 'voice', 'music'].includes(
+        kind
+      )
+        ? kind
+        : 'images';
+      const safeName =
+        String(fileName || 'upload.bin')
+          .replace(/[^a-zA-Z0-9._-]/g, '-')
+          .replace(/^\.+/, '')
+          .slice(0, 160) || `media-${Date.now()}.bin`;
+      const cleanSongTitle = typeof songTitle === 'string' ? songTitle.trim().slice(0, 120) : '';
+      const stamp = Date.now().toString(36);
+      const objectKey = `projects/${safeSlug}/${safeKind}/${stamp}-${safeName}`;
+      const localFilePath = resolveSafeUploadPath(objectKey);
+      await fs.promises.mkdir(path.dirname(localFilePath), { recursive: true });
+
+      let totalSize = 0;
+      const outStream = fs.createWriteStream(localFilePath);
+      try {
+        for (let i = 0; i < totalChunks; i++) {
+          const partPath = path.join(sessionDir, `${String(i).padStart(5, '0')}.part`);
+          if (!fs.existsSync(partPath)) {
+            throw new Error(`Missing upload chunk ${i + 1} of ${totalChunks}.`);
+          }
+          const partBuf = await fs.promises.readFile(partPath);
+          totalSize += partBuf.length;
+          if (totalSize > MAX_UPLOAD_BYTES) {
+            throw new Error('FILE_TOO_LARGE');
+          }
+          if (!outStream.write(partBuf)) {
+            await new Promise<void>((resolve, reject) => {
+              outStream.once('drain', resolve);
+              outStream.once('error', reject);
+            });
+          }
+        }
+        await new Promise<void>((resolve, reject) => {
+          outStream.on('error', reject);
+          outStream.on('finish', resolve);
+          outStream.end();
+        });
+      } catch (assembleErr) {
+        outStream.destroy();
+        await fs.promises.unlink(localFilePath).catch(() => {});
+        await fs.promises.rm(sessionDir, { recursive: true, force: true }).catch(() => {});
+        if (assembleErr instanceof Error && assembleErr.message === 'FILE_TOO_LARGE') {
+          res.status(413).json({ error: 'File exceeds the 50 MB maximum upload size.' });
+          return;
+        }
+        throw assembleErr;
+      }
+
+      await fs.promises.rm(sessionDir, { recursive: true, force: true }).catch(() => {});
+
+      const finalUrl = `/uploads/firebase/${objectKey}`;
+      const rawOriginal =
+        typeof originalBytes === 'number' && originalBytes >= totalSize
+          ? originalBytes
+          : totalSize;
+
+      const record: FirebaseMediaRecord = {
+        id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        objectKey,
+        fileName: cleanSongTitle || safeName,
+        ...(cleanSongTitle ? { songTitle: cleanSongTitle } : {}),
+        kind: safeKind,
+        contentType: contentType || 'application/octet-stream',
+        sizeBytes: totalSize,
+        originalBytes: rawOriginal,
+        savedBytes: Math.max(0, rawOriginal - totalSize),
+        width: typeof width === 'number' && width > 0 ? width : undefined,
+        height: typeof height === 'number' && height > 0 ? height : undefined,
+        projectSlug: safeSlug,
+        url: finalUrl,
+        storageTier: 'firebase-5gb',
+        createdAt: new Date().toISOString(),
+      };
+      mediaCatalog.unshift(record);
+
+      res.json({ ok: true, completed: true, object: record });
+    } catch (err) {
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'JSON chunked media upload failed',
+        });
+      }
+    }
+  });
 
   // 1. Firebase 5GB Free Plan Storage & Firestore Database Status
   app.get('/api/firebase/status', (_req, res) => {
