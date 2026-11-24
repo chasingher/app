@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useReducer } from 'react';
 import {
   Heart,
   Upload,
@@ -23,6 +23,8 @@ import {
   Film,
   HardDrive,
   AlertTriangle,
+  RotateCcw,
+  XCircle,
 } from 'lucide-react';
 import {
   ChasingHerProjectData,
@@ -50,12 +52,15 @@ import {
   INITIAL_MUSIC_LIBRARY,
 } from '../utils/supabaseAndOci';
 import {
-  saveChasingHerProjectToFirestore,
-  saveMemoriesProjectToFirestore,
-} from '../utils/firebaseClient';
-import {
   computePoolUploadProgress,
+  createUploadSessionId,
+  createUploadSessionLogger,
   formatUploadErrorMessage,
+  INITIAL_UPLOAD_RECOVERY_STATE,
+  isUploadCancelledError,
+  isUploadTimeoutError,
+  MID_PROCESS_STALL_WARNING_MS,
+  reduceUploadRecoveryState,
 } from '../utils/uploadPipeline';
 import { compressImageBatch } from '../utils/imageCompression';
 import {
@@ -330,11 +335,21 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
   const [saveBanner, setSaveBanner] = useState<string>('');
   const [quotaErrorBanner, setQuotaErrorBanner] = useState<string>('');
   const [isProcessingUpload, setIsProcessingUpload] = useState<boolean>(false);
+  const [isPublishingUpload, setIsPublishingUpload] = useState<boolean>(false);
   const [uploadProgressDetail, setUploadProgressDetail] = useState<{
     stage: string;
     completed: number;
     total: number;
   } | null>(null);
+  const [uploadRecovery, dispatchUploadRecovery] = useReducer(
+    reduceUploadRecoveryState,
+    INITIAL_UPLOAD_RECOVERY_STATE
+  );
+  const uploadAbortControllerRef = useRef<AbortController | null>(null);
+  const uploadRecoveryRef = useRef(uploadRecovery);
+  uploadRecoveryRef.current = uploadRecovery;
+  const loadedSlugRef = useRef<string>(activeSlug || 'ama-and-kofi');
+
   const stagedBlobFilesRef = useRef<
     Record<
       string,
@@ -378,6 +393,53 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
     }
   };
 
+  // Abort any in-flight transfer cleanly on unmount
+  useEffect(() => {
+    return () => {
+      if (uploadAbortControllerRef.current) {
+        try {
+          uploadAbortControllerRef.current.abort('COMPONENT_UNMOUNTED');
+        } catch {
+          // ignore
+        }
+        uploadAbortControllerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Mid-process stall monitor: detects if an active upload stops advancing for 12s
+  // and immediately exposes proactive Cancel & Retry controls before the 45s hard timeout.
+  useEffect(() => {
+    if (uploadRecovery.status !== 'uploading' && uploadRecovery.status !== 'staging') {
+      return;
+    }
+    const interval = setInterval(() => {
+      const current = uploadRecoveryRef.current;
+      if (
+        (current.status === 'uploading' || current.status === 'staging') &&
+        current.lastActivityAtMs !== null
+      ) {
+        const idleMs = Date.now() - current.lastActivityAtMs;
+        if (idleMs >= MID_PROCESS_STALL_WARNING_MS) {
+          console.warn(
+            `[SiteBuilderUpload][${current.sessionId || 'session'}][mid-process-timeout] No upload progress for ${Math.round(
+              idleMs / 1000
+            )}s at ${current.percent}% (${current.phase}) — exposing Cancel & Retry recovery controls`,
+            {
+              projectSlug: slug,
+              phase: current.phase,
+              activeFileName: current.activeFileName,
+              percent: current.percent,
+              idleMs,
+            }
+          );
+          dispatchUploadRecovery({ type: 'MARK_STALLED' });
+        }
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [uploadRecovery.status, slug]);
+
   // Sync product & slug changes cleanly from parent (e.g. switching projects in Unified Admin)
   useEffect(() => {
     setProduct(initialProduct);
@@ -386,11 +448,21 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
 
   useEffect(() => {
     const cleanSlug = activeSlug || 'ama-and-kofi';
+    const hasStagedFiles = Object.keys(stagedBlobFilesRef.current).length > 0;
+    const isSlugSwitch = loadedSlugRef.current !== cleanSlug;
+    // Never overwrite local unsaved staged media mid-upload when background snapshots arrive for the same slug
+    if (!isSlugSwitch && (hasStagedFiles || isPublishingUpload || isProcessingUpload)) {
+      return;
+    }
+    loadedSlugRef.current = cleanSlug;
     setSlug(cleanSlug);
     setChForm(chasingHerProjects[cleanSlug] || makeDefaultChasingHer(cleanSlug));
     setMemForm(memoriesProjects[cleanSlug] || makeDefaultMemories(cleanSlug));
-    setQuotaErrorBanner('');
-  }, [activeSlug, chasingHerProjects, memoriesProjects]);
+    if (isSlugSwitch) {
+      setQuotaErrorBanner('');
+      dispatchUploadRecovery({ type: 'RESET' });
+    }
+  }, [activeSlug, chasingHerProjects, memoriesProjects, isPublishingUpload, isProcessingUpload]);
 
   const mosaicPreviewSlots = useMemo(() => buildHeartMosaicLayout(9, 7), []);
 
@@ -450,6 +522,40 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
     setTimeout(() => setUploadingStatus(''), 3500);
   };
 
+  const handleCancelActiveUpload = () => {
+    const current = uploadRecoveryRef.current;
+    console.warn(
+      `[SiteBuilderUpload][${current.sessionId || 'session'}][cancelled] User clicked Cancel Upload during "${current.phase || 'transfer'}" at ${current.percent}%`,
+      {
+        projectSlug: slug,
+        activeFileName: current.activeFileName,
+        percent: current.percent,
+        status: current.status,
+      }
+    );
+    if (uploadAbortControllerRef.current) {
+      try {
+        uploadAbortControllerRef.current.abort('USER_CANCELLED');
+      } catch {
+        // ignore
+      }
+      uploadAbortControllerRef.current = null;
+    }
+    setIsPublishingUpload(false);
+    setIsProcessingUpload(false);
+    setSaveBanner('');
+    setUploadingStatus('');
+    setUploadProgressDetail(null);
+    const hasRemainingStaged = Object.keys(stagedBlobFilesRef.current).length > 0;
+    dispatchUploadRecovery({
+      type: 'CANCEL',
+      canRetry: hasRemainingStaged,
+      reason: hasRemainingStaged
+        ? 'Upload cancelled. Your selected files are still safely staged — tap Retry Upload whenever you are ready.'
+        : 'Upload preparation cancelled. You can pick your files again anytime.',
+    });
+  };
+
   const handleFirebaseFileUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     target: 'ch-photo' | 'flower' | 'mem-mosaic' | 'mem-slide' | 'voice' | 'music'
@@ -464,14 +570,55 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
     const rawFiles: File[] = Array.from(fileList);
     e.target.value = '';
 
+    const stageSessionId = createUploadSessionId();
+    const totalRawBytes = rawFiles.reduce((sum, f) => sum + f.size, 0);
+    const stageKind: 'images' | 'video' | 'voice' | 'music' =
+      target === 'voice'
+        ? 'voice'
+        : target === 'music'
+        ? 'music'
+        : rawFiles[0]?.type.startsWith('video/')
+        ? 'video'
+        : 'images';
+
+    const stageLogger = createUploadSessionLogger({
+      sessionId: stageSessionId,
+      projectSlug: slug,
+      fileName:
+        rawFiles.length === 1
+          ? rawFiles[0].name
+          : `${rawFiles.length} files (${rawFiles[0].name}…)`,
+      kind: stageKind,
+      fileSizeBytes: totalRawBytes,
+    });
+
+    const stageAbortController = new AbortController();
+    uploadAbortControllerRef.current = stageAbortController;
+
+    stageLogger.info(
+      'init',
+      `Selected ${rawFiles.length} file${rawFiles.length > 1 ? 's' : ''} for target="${target}" (${Math.round(
+        totalRawBytes / 1024
+      )} KB total)`,
+      { transport: 'staging', percent: 0 }
+    );
+
     setQuotaErrorBanner('');
     setIsProcessingUpload(true);
     setUploadProgressDetail({
-      stage: 'Preparing image…',
+      stage: 'Preparing files…',
       completed: 0,
       total: rawFiles.length,
     });
-    setUploadingStatus('Preparing image…');
+    setUploadingStatus('Preparing files…');
+    dispatchUploadRecovery({
+      type: 'START',
+      mode: 'staging',
+      sessionId: stageSessionId,
+      totalFiles: rawFiles.length,
+      phase: 'Preparing & optimizing selected files…',
+      activeFileName: rawFiles[0]?.name || '',
+    });
 
     try {
       let runningUsedBytes = storageUsage.usedBytes;
@@ -509,6 +656,11 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
       >();
 
       if (imageFilesToCompress.length > 0) {
+        stageLogger.info(
+          'compress',
+          `Compressing ${imageFilesToCompress.length} image${imageFilesToCompress.length > 1 ? 's' : ''} on device before staging`,
+          { transport: 'staging', percent: 15 }
+        );
         setUploadProgressDetail({
           stage: 'Optimizing image…',
           completed: 0,
@@ -525,13 +677,25 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
           forcePreserveTransparency: target === 'flower',
           onStatus: (msg) => setUploadingStatus(msg),
           onProgress: (done, tot) => {
+            const pct = tot > 0 ? Math.round((done / tot) * 80) : 50;
             setUploadProgressDetail({
               stage: 'Optimizing image…',
               completed: done,
               total: tot,
             });
+            dispatchUploadRecovery({
+              type: 'PROGRESS',
+              percent: pct,
+              phase: `Optimizing image ${done} of ${tot}…`,
+              completedFiles: done,
+            });
           },
         });
+
+        if (stageAbortController.signal.aborted) {
+          stageLogger.warn('cancelled', 'File staging cancelled by user after compression');
+          return;
+        }
 
         batchOut.results.forEach((res, i) => {
           compressedByIndex.set(imageIndices[i], res);
@@ -539,6 +703,10 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
       }
 
       for (let i = 0; i < rawFiles.length; i++) {
+        if (stageAbortController.signal.aborted) {
+          stageLogger.warn('cancelled', `File staging cancelled mid-batch at file ${i + 1}/${rawFiles.length}`);
+          return;
+        }
         const rawFile = rawFiles[i];
         const compResult = compressedByIndex.get(i);
         // Use the compressed file (never retain both original and compressed file in memory/storage)
@@ -708,35 +876,61 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
           ? Math.round((batchSaved / totalBatchOriginalBytes) * 100)
           : 0;
 
+      stageLogger.info(
+        'stage',
+        `Staged ${rawFiles.length} file${rawFiles.length > 1 ? 's' : ''} (${Math.round(
+          totalBatchCompressedBytes / 1024
+        )} KB, saved ${batchSavedPct}%) — ready for Save & Publish`,
+        { transport: 'staging', percent: 100, bytesTransferred: totalBatchCompressedBytes }
+      );
+
       setUploadProgressDetail({
-        stage: 'Upload complete',
+        stage: 'Staged & ready',
         completed: rawFiles.length,
         total: rawFiles.length,
       });
+      dispatchUploadRecovery({ type: 'RESET' });
 
       if (compressedImageCount > 0 && batchSaved > 0) {
         setUploadingStatus(
-          `Upload complete · Optimized ${formatStorageCompact(
+          `Staged & ready · Optimized ${formatStorageCompact(
             totalBatchOriginalBytes
-          )} → ${formatStorageCompact(totalBatchCompressedBytes)} (${batchSavedPct}% storage saved)`
+          )} → ${formatStorageCompact(totalBatchCompressedBytes)} (${batchSavedPct}% saved). Tap Save & Publish to store permanently.`
         );
       } else if (target === 'music' || target === 'voice') {
         setUploadingStatus(
-          'Audio staged in your 50 MB build! Only the final audio you keep & save gets permanently stored.'
+          'Audio staged in your 50 MB build! Tap Save & Publish to permanently store your chosen track.'
         );
       } else {
         setUploadingStatus(
-          `Upload complete · ${formatStorageCompact(totalBatchCompressedBytes)} staged in your 50 MB build.`
+          `Staged · ${formatStorageCompact(totalBatchCompressedBytes)} ready in your 50 MB build. Tap Save & Publish to store.`
         );
       }
     } catch (err) {
-      setQuotaErrorBanner(
-        err instanceof Error
-          ? err.message
-          : 'Could not optimize or stage the selected image. Please try another photo.'
-      );
+      if (isUploadCancelledError(err) || stageAbortController.signal.aborted) {
+        stageLogger.warn('cancelled', 'File staging aborted by user');
+      } else {
+        const errMsg =
+          err instanceof Error
+            ? err.message
+            : 'Could not optimize or stage the selected file. Please try another file.';
+        stageLogger.error('mid-process-error', `File staging failed: ${errMsg}`, {
+          transport: 'staging',
+          error: err,
+        });
+        setQuotaErrorBanner(errMsg);
+        dispatchUploadRecovery({
+          type: 'FAIL',
+          errorMessage: errMsg,
+          failurePhase: 'File preparation',
+          canRetry: false,
+        });
+      }
       setUploadingStatus('');
     } finally {
+      if (uploadAbortControllerRef.current === stageAbortController) {
+        uploadAbortControllerRef.current = null;
+      }
       setIsProcessingUpload(false);
       setTimeout(() => {
         setUploadProgressDetail(null);
@@ -825,10 +1019,30 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
   };
 
   const handleSaveProject = async () => {
+    if (isPublishingUpload) {
+      console.warn('[SiteBuilderUpload][init] Save & Publish ignored while another upload is already running');
+      return;
+    }
+
+    const batchSessionId = createUploadSessionId();
+    const abortController = new AbortController();
+    uploadAbortControllerRef.current = abortController;
+
     setQuotaErrorBanner('');
+    setIsPublishingUpload(true);
     setSaveBanner('Preparing fast upload…');
     let hadUploadFailure = false;
+    let wasCancelledByUser = false;
     let lastUploadError = '';
+    let lastFailurePhase = 'mid-process transfer';
+
+    const batchLogger = createUploadSessionLogger({
+      sessionId: batchSessionId,
+      projectSlug: slug,
+      fileName: `${product}/${slug}`,
+      kind: 'project',
+      fileSizeBytes: storageUsage.breakdown.stagedBytes,
+    });
 
     const uploadStagedPool = async (
       items: ActiveBuildMediaItem[],
@@ -838,25 +1052,66 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
         (item) => item.status === 'staged' && Boolean(stagedBlobFilesRef.current[item.url])
       );
       const uploadedMap = new Map<string, Awaited<ReturnType<typeof uploadMediaToFirebase>>>();
-      if (stagedItems.length === 0) return uploadedMap;
+      if (stagedItems.length === 0) {
+        batchLogger.info('upload-start', 'No staged media files to upload; saving project metadata directly', {
+          transport: 'firestore',
+          percent: 95,
+        });
+        return uploadedMap;
+      }
+
+      batchLogger.info(
+        'upload-start',
+        `Starting Save & Publish upload pool for ${stagedItems.length} staged file${stagedItems.length > 1 ? 's' : ''} (${Math.round(
+          storageUsage.breakdown.stagedBytes / 1024
+        )} KB)`,
+        {
+          transport: 'chunked-binary',
+          percent: 5,
+        }
+      );
+
+      setUploadingStatus('');
+      dispatchUploadRecovery({
+        type: 'START',
+        mode: 'uploading',
+        sessionId: batchSessionId,
+        totalFiles: stagedItems.length,
+        phase: `Uploading ${stagedItems[0].name}…`,
+        activeFileName: stagedItems[0].name,
+      });
 
       const progressByIndex = new Array<number>(stagedItems.length).fill(0);
+      let completedCount = 0;
       let nextIdx = 0;
       const concurrency = Math.min(2, stagedItems.length);
 
-      const updateOverallProgress = () => {
+      const updateOverallProgress = (phaseLabel?: string, activeFileName?: string) => {
         const avg = computePoolUploadProgress(progressByIndex);
         setSaveBanner(
           `Uploading ${stagedItems.length} file${stagedItems.length > 1 ? 's' : ''}… ${avg}%`
         );
+        dispatchUploadRecovery({
+          type: 'PROGRESS',
+          percent: avg,
+          phase: phaseLabel,
+          activeFileName,
+          completedFiles: completedCount,
+        });
       };
 
       const worker = async () => {
         while (nextIdx < stagedItems.length) {
+          if (abortController.signal.aborted) {
+            wasCancelledByUser = true;
+            return;
+          }
           const current = nextIdx++;
           const item = stagedItems[current];
           const entry = stagedBlobFilesRef.current[item.url];
           if (!entry) continue;
+
+          const fileSessionId = `${batchSessionId}-f${current + 1}`;
           try {
             const uploaded = await uploadMediaToFirebase({
               file: entry.file,
@@ -868,19 +1123,52 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
               originalBytes: entry.originalBytes,
               width: entry.width,
               height: entry.height,
+              signal: abortController.signal,
+              sessionId: fileSessionId,
+              onPhaseChange: (evt) => {
+                updateOverallProgress(evt.detail, item.name);
+              },
               onProgress: (pct) => {
                 progressByIndex[current] = pct;
-                updateOverallProgress();
+                updateOverallProgress(undefined, item.name);
               },
             });
             progressByIndex[current] = 100;
-            updateOverallProgress();
+            completedCount += 1;
+            updateOverallProgress(
+              `Uploaded ${completedCount} of ${stagedItems.length} files`,
+              item.name
+            );
             uploadedMap.set(item.url, uploaded);
           } catch (err) {
+            if (isUploadCancelledError(err) || abortController.signal.aborted) {
+              wasCancelledByUser = true;
+              batchLogger.warn(
+                'cancelled',
+                `Cancelled upload for "${item.name}" at ${progressByIndex[current]}%`,
+                {
+                  percent: progressByIndex[current],
+                  error: err,
+                }
+              );
+              return;
+            }
             hadUploadFailure = true;
+            const isTimeout = isUploadTimeoutError(err);
+            lastFailurePhase = isTimeout
+              ? `Mid-process timeout while uploading "${item.name}" (${progressByIndex[current]}%)`
+              : `Mid-process error while uploading "${item.name}" (${progressByIndex[current]}%)`;
             lastUploadError = formatUploadErrorMessage(
               err,
               `Failed to upload "${item.name}".`
+            );
+            batchLogger.error(
+              isTimeout ? 'mid-process-timeout' : 'mid-process-error',
+              `${lastFailurePhase}: ${lastUploadError}`,
+              {
+                percent: progressByIndex[current],
+                error: err,
+              }
             );
           }
         }
@@ -890,125 +1178,201 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
       return uploadedMap;
     };
 
-    if (product === 'chasing-her') {
-      let working: ChasingHerProjectData = { ...chForm, slug };
-      const currentUsage = computeProjectStorageUsage(working, 'chasing-her');
-      const uploadedMap = await uploadStagedPool(currentUsage.activeFiles, working.music_title);
+    try {
+      if (product === 'chasing-her') {
+        let working: ChasingHerProjectData = { ...chForm, slug };
+        const currentUsage = computeProjectStorageUsage(working, 'chasing-her');
+        const uploadedMap = await uploadStagedPool(currentUsage.activeFiles, working.music_title);
 
-      for (const item of currentUsage.activeFiles) {
-        const uploaded = uploadedMap.get(item.url);
-        if (!uploaded) continue;
-        const permanentUrl = uploaded.url;
-        releaseMediaUrlResources(item.url);
+        for (const item of currentUsage.activeFiles) {
+          const uploaded = uploadedMap.get(item.url);
+          if (!uploaded) continue;
+          const permanentUrl = uploaded.url;
+          releaseMediaUrlResources(item.url);
 
-        if (working.music_url === item.url) working.music_url = permanentUrl;
-        working.photos = working.photos.map((p) =>
-          p.url === item.url ? { ...p, url: permanentUrl } : p
+          if (working.music_url === item.url) working.music_url = permanentUrl;
+          working.photos = working.photos.map((p) =>
+            p.url === item.url ? { ...p, url: permanentUrl } : p
+          );
+          working.flower_images = [...DEFAULT_FLOWER_POOL];
+          working.media_meta = {
+            ...(working.media_meta || {}),
+            [permanentUrl]: {
+              url: permanentUrl,
+              name: item.category === 'music' ? working.music_title?.trim() || item.name : item.name,
+              sizeBytes: uploaded.sizeBytes || item.sizeBytes,
+              originalSizeBytes: uploaded.originalBytes || item.originalSizeBytes,
+              savedBytes: uploaded.savedBytes ?? item.savedBytes,
+              width: uploaded.width || item.width,
+              height: uploaded.height || item.height,
+              outputFormat: uploaded.contentType || item.outputFormat,
+              category: item.category,
+              status: 'saved',
+            },
+          };
+        }
+
+        if (wasCancelledByUser) {
+          setChForm(working);
+          setSaveBanner('');
+          dispatchUploadRecovery({
+            type: 'CANCEL',
+            canRetry: true,
+            reason:
+              'Upload cancelled. Any completed files were kept and your remaining files are still safely staged — tap Retry Upload when ready.',
+          });
+          return;
+        }
+
+        if (hadUploadFailure) {
+          setChForm(working);
+          const failureNotice = lastUploadError
+            ? `${lastUploadError} Your media remains safely staged — tap Retry Upload to try again.`
+            : 'Network connection interrupted mid-upload. Your optimized media remains safely staged — tap Retry Upload to continue.';
+          setQuotaErrorBanner(failureNotice);
+          dispatchUploadRecovery({
+            type: 'FAIL',
+            errorMessage: failureNotice,
+            failurePhase: lastFailurePhase,
+            canRetry: true,
+          });
+          setSaveBanner('');
+          return;
+        }
+
+        const { committedProject, purgedStagedUrls } = commitProjectSavedMedia(
+          { ...working, flower_images: [...DEFAULT_FLOWER_POOL] },
+          'chasing-her'
         );
-        working.flower_images = [...DEFAULT_FLOWER_POOL];
-        working.media_meta = {
-          ...(working.media_meta || {}),
-          [permanentUrl]: {
-            url: permanentUrl,
-            name: item.category === 'music' ? working.music_title?.trim() || item.name : item.name,
-            sizeBytes: uploaded.sizeBytes || item.sizeBytes,
-            originalSizeBytes: uploaded.originalBytes || item.originalSizeBytes,
-            savedBytes: uploaded.savedBytes ?? item.savedBytes,
-            width: uploaded.width || item.width,
-            height: uploaded.height || item.height,
-            outputFormat: uploaded.contentType || item.outputFormat,
-            category: item.category,
-            status: 'saved',
-          },
-        };
+        for (const purgedUrl of purgedStagedUrls) {
+          releaseMediaUrlResources(purgedUrl);
+        }
+
+        setChForm(committedProject);
+        onSaveChasingHer(slug, committedProject);
+        batchLogger.info('complete', `Committed Chasing Her project "/${slug}" (${uploadedMap.size} new media file${uploadedMap.size === 1 ? '' : 's'})`, {
+          transport: 'firestore',
+          percent: 100,
+        });
+      } else {
+        let working: MemoriesProjectData = { ...memForm, slug };
+        const currentUsage = computeProjectStorageUsage(working, 'memories');
+        const uploadedMap = await uploadStagedPool(currentUsage.activeFiles, working.music_title);
+
+        for (const item of currentUsage.activeFiles) {
+          const uploaded = uploadedMap.get(item.url);
+          if (!uploaded) continue;
+          const permanentUrl = uploaded.url;
+          releaseMediaUrlResources(item.url);
+
+          if (working.music_url === item.url) working.music_url = permanentUrl;
+          if (working.voice_url === item.url) working.voice_url = permanentUrl;
+          working.mosaic_images = working.mosaic_images.map((u) =>
+            u === item.url ? permanentUrl : u
+          );
+          working.memories = working.memories.map((m) =>
+            m.url === item.url ? { ...m, url: permanentUrl } : m
+          );
+          working.flower_images = [...DEFAULT_FLOWER_POOL];
+          working.media_meta = {
+            ...(working.media_meta || {}),
+            [permanentUrl]: {
+              url: permanentUrl,
+              name: item.category === 'music' ? working.music_title?.trim() || item.name : item.name,
+              sizeBytes: uploaded.sizeBytes || item.sizeBytes,
+              originalSizeBytes: uploaded.originalBytes || item.originalSizeBytes,
+              savedBytes: uploaded.savedBytes ?? item.savedBytes,
+              width: uploaded.width || item.width,
+              height: uploaded.height || item.height,
+              outputFormat: uploaded.contentType || item.outputFormat,
+              category: item.category,
+              status: 'saved',
+            },
+          };
+        }
+
+        if (wasCancelledByUser) {
+          setMemForm(working);
+          setSaveBanner('');
+          dispatchUploadRecovery({
+            type: 'CANCEL',
+            canRetry: true,
+            reason:
+              'Upload cancelled. Any completed files were kept and your remaining files are still safely staged — tap Retry Upload when ready.',
+          });
+          return;
+        }
+
+        if (hadUploadFailure) {
+          setMemForm(working);
+          const failureNotice = lastUploadError
+            ? `${lastUploadError} Your media remains safely staged — tap Retry Upload to try again.`
+            : 'Network connection interrupted mid-upload. Your optimized media remains safely staged — tap Retry Upload to continue.';
+          setQuotaErrorBanner(failureNotice);
+          dispatchUploadRecovery({
+            type: 'FAIL',
+            errorMessage: failureNotice,
+            failurePhase: lastFailurePhase,
+            canRetry: true,
+          });
+          setSaveBanner('');
+          return;
+        }
+
+        const { committedProject, purgedStagedUrls } = commitProjectSavedMedia(
+          { ...working, flower_images: [...DEFAULT_FLOWER_POOL] },
+          'memories'
+        );
+        for (const purgedUrl of purgedStagedUrls) {
+          releaseMediaUrlResources(purgedUrl);
+        }
+
+        setMemForm(committedProject);
+        onSaveMemories(slug, committedProject);
+        batchLogger.info('complete', `Committed Memories project "/${slug}" (${uploadedMap.size} new media file${uploadedMap.size === 1 ? '' : 's'})`, {
+          transport: 'firestore',
+          percent: 100,
+        });
       }
 
-      if (hadUploadFailure) {
-        setChForm(working);
-        setQuotaErrorBanner(
-          lastUploadError
-            ? `${lastUploadError} Your media remains safely staged — tap Save & Publish to retry.`
-            : 'Network connection interrupted while uploading media. Your optimized media remains safely staged — tap Save & Publish to retry.'
-        );
-        setSaveBanner('');
-        return;
-      }
-
-      const { committedProject, purgedStagedUrls } = commitProjectSavedMedia(
-        { ...working, flower_images: [...DEFAULT_FLOWER_POOL] },
-        'chasing-her'
+      setUploadingStatus('');
+      dispatchUploadRecovery({
+        type: 'COMPLETE',
+        phase: 'All chosen media permanently saved & published',
+      });
+      setSaveBanner(
+        'Upload complete · Chosen audio & optimized media permanently stored in your 50 MB Firebase build.'
       );
-      for (const purgedUrl of purgedStagedUrls) {
-        releaseMediaUrlResources(purgedUrl);
-      }
-
-      setChForm(committedProject);
-      onSaveChasingHer(slug, committedProject);
-      void saveChasingHerProjectToFirestore(slug, committedProject).catch(() => {});
-    } else {
-      let working: MemoriesProjectData = { ...memForm, slug };
-      const currentUsage = computeProjectStorageUsage(working, 'memories');
-      const uploadedMap = await uploadStagedPool(currentUsage.activeFiles, working.music_title);
-
-      for (const item of currentUsage.activeFiles) {
-        const uploaded = uploadedMap.get(item.url);
-        if (!uploaded) continue;
-        const permanentUrl = uploaded.url;
-        releaseMediaUrlResources(item.url);
-
-        if (working.music_url === item.url) working.music_url = permanentUrl;
-        if (working.voice_url === item.url) working.voice_url = permanentUrl;
-        working.mosaic_images = working.mosaic_images.map((u) =>
-          u === item.url ? permanentUrl : u
-        );
-        working.memories = working.memories.map((m) =>
-          m.url === item.url ? { ...m, url: permanentUrl } : m
-        );
-        working.flower_images = [...DEFAULT_FLOWER_POOL];
-        working.media_meta = {
-          ...(working.media_meta || {}),
-          [permanentUrl]: {
-            url: permanentUrl,
-            name: item.category === 'music' ? working.music_title?.trim() || item.name : item.name,
-            sizeBytes: uploaded.sizeBytes || item.sizeBytes,
-            originalSizeBytes: uploaded.originalBytes || item.originalSizeBytes,
-            savedBytes: uploaded.savedBytes ?? item.savedBytes,
-            width: uploaded.width || item.width,
-            height: uploaded.height || item.height,
-            outputFormat: uploaded.contentType || item.outputFormat,
-            category: item.category,
-            status: 'saved',
-          },
-        };
-      }
-
-      if (hadUploadFailure) {
-        setMemForm(working);
-        setQuotaErrorBanner(
-          lastUploadError
-            ? `${lastUploadError} Your media remains safely staged — tap Save & Publish to retry.`
-            : 'Network connection interrupted while uploading media. Your optimized media remains safely staged — tap Save & Publish to retry.'
-        );
+      setTimeout(() => {
         setSaveBanner('');
-        return;
+        dispatchUploadRecovery({ type: 'RESET' });
+      }, 4500);
+    } finally {
+      if (uploadAbortControllerRef.current === abortController) {
+        uploadAbortControllerRef.current = null;
       }
-
-      const { committedProject, purgedStagedUrls } = commitProjectSavedMedia(
-        { ...working, flower_images: [...DEFAULT_FLOWER_POOL] },
-        'memories'
-      );
-      for (const purgedUrl of purgedStagedUrls) {
-        releaseMediaUrlResources(purgedUrl);
-      }
-
-      setMemForm(committedProject);
-      onSaveMemories(slug, committedProject);
-      void saveMemoriesProjectToFirestore(slug, committedProject).catch(() => {});
+      setIsPublishingUpload(false);
     }
-    setSaveBanner(
-      'Upload complete · Chosen audio & optimized media permanently stored in your 50 MB Firebase build.'
-    );
-    setTimeout(() => setSaveBanner(''), 4000);
+  };
+
+  const handleRetryStuckUpload = () => {
+    console.info('[SiteBuilderUpload][mid-process-retry] User clicked Retry Upload', {
+      projectSlug: slug,
+      previousStatus: uploadRecoveryRef.current.status,
+      previousPercent: uploadRecoveryRef.current.percent,
+    });
+    if (uploadAbortControllerRef.current) {
+      try {
+        uploadAbortControllerRef.current.abort('USER_RETRY');
+      } catch {
+        // ignore
+      }
+      uploadAbortControllerRef.current = null;
+    }
+    setIsPublishingUpload(false);
+    setTimeout(() => {
+      void handleSaveProject();
+    }, 60);
   };
 
   const handleExportHtml = () => {
@@ -1119,13 +1483,143 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
           <button
             type="button"
             onClick={handleSaveProject}
-            className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#5A1A2C] hover:bg-[#42111F] text-xs font-bold text-[#FBF3EA] flex items-center gap-2 shadow-sm cursor-pointer whitespace-nowrap shrink-0"
+            disabled={isPublishingUpload}
+            data-testid="builder-save-publish-btn"
+            className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#5A1A2C] hover:bg-[#42111F] disabled:opacity-70 text-xs font-bold text-[#FBF3EA] flex items-center gap-2 shadow-sm cursor-pointer whitespace-nowrap shrink-0"
           >
             <Save className="h-4 w-4 text-[#E2B96F] shrink-0" />
-            <span>Save & Publish</span>
+            <span>
+              {isPublishingUpload
+                ? `Uploading… ${uploadRecovery.percent}%`
+                : 'Save & Publish'}
+            </span>
           </button>
         </div>
       </div>
+
+      {/* Active Upload Progress & Stuck-Upload Cancel/Retry Recovery Panel */}
+      {uploadRecovery.status !== 'idle' && (
+        <div
+          role={uploadRecovery.status === 'error' || uploadRecovery.status === 'stalled' ? 'alert' : 'status'}
+          data-testid="upload-recovery-panel"
+          data-upload-status={uploadRecovery.status}
+          className={`rounded-2xl border p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs ${
+            uploadRecovery.status === 'error'
+              ? 'bg-[#FDE8E8] border-[#E5A3A3] text-[#7D1D1D]'
+              : uploadRecovery.status === 'stalled' || uploadRecovery.status === 'cancelled'
+              ? 'bg-[#FFF6E5] border-[#E2B96F] text-[#5C3D10]'
+              : uploadRecovery.status === 'success'
+              ? 'bg-[#E7F4EC] border-[#9CD3B0] text-[#1D5735]'
+              : 'bg-[#3A0D18] border-[#E2B96F]/45 text-[#FBF3EA]'
+          }`}
+        >
+          <div className="space-y-1.5 flex-1 min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
+              <span className="flex items-center gap-2 truncate">
+                {uploadRecovery.status === 'error' || uploadRecovery.status === 'stalled' ? (
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                ) : uploadRecovery.status === 'success' ? (
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                ) : (
+                  <Cloud className="h-4 w-4 shrink-0 text-[#E2B96F]" />
+                )}
+                <span className="truncate">
+                  {uploadRecovery.status === 'stalled'
+                    ? `Upload appears stuck at ${uploadRecovery.percent}%`
+                    : uploadRecovery.status === 'cancelled'
+                    ? 'Upload Cancelled — Files Safely Staged'
+                    : uploadRecovery.status === 'error'
+                    ? 'Upload Interrupted Mid-Process'
+                    : uploadRecovery.status === 'success'
+                    ? 'Upload Complete & Saved'
+                    : uploadRecovery.phase || 'Uploading media…'}
+                </span>
+              </span>
+              <span className="font-mono tabular-nums shrink-0">
+                {uploadRecovery.percent}%
+              </span>
+            </div>
+
+            {(uploadRecovery.status === 'uploading' ||
+              uploadRecovery.status === 'staging' ||
+              uploadRecovery.status === 'stalled') && (
+              <div className="h-2 w-full rounded-full bg-black/20 overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-300 ${
+                    uploadRecovery.status === 'stalled' ? 'bg-[#D97706]' : 'bg-[#E2B96F]'
+                  }`}
+                  style={{ width: `${Math.max(4, uploadRecovery.percent)}%` }}
+                />
+              </div>
+            )}
+
+            <p className="text-xs opacity-90 leading-relaxed">
+              {uploadRecovery.status === 'stalled'
+                ? `No network progress for over ${Math.round(
+                    MID_PROCESS_STALL_WARNING_MS / 1000
+                  )} seconds (${uploadRecovery.phase || uploadRecovery.activeFileName}). Cancel and retry immediately without losing your staged files.`
+                : uploadRecovery.status === 'cancelled' || uploadRecovery.status === 'error'
+                ? uploadRecovery.errorMessage
+                : uploadRecovery.activeFileName
+                ? `Processing: ${uploadRecovery.activeFileName}${
+                    uploadRecovery.totalFiles > 1
+                      ? ` (${uploadRecovery.completedFiles}/${uploadRecovery.totalFiles} completed)`
+                      : ''
+                  }`
+                : uploadRecovery.phase}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {(uploadRecovery.status === 'uploading' ||
+              uploadRecovery.status === 'staging' ||
+              uploadRecovery.status === 'stalled') && (
+              <button
+                type="button"
+                data-testid="cancel-upload-btn"
+                onClick={handleCancelActiveUpload}
+                className={`min-h-[40px] px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                  uploadRecovery.status === 'stalled'
+                    ? 'border border-[#B45309]/40 bg-white text-[#7C2D12] hover:bg-[#FEF3C7]'
+                    : 'border border-[#E2B96F]/45 bg-[#22070E] text-[#FBF3EA] hover:bg-[#4F1524]'
+                }`}
+              >
+                <XCircle className="h-4 w-4 shrink-0" />
+                <span>Cancel Upload</span>
+              </button>
+            )}
+
+            {(uploadRecovery.status === 'stalled' ||
+              ((uploadRecovery.status === 'cancelled' || uploadRecovery.status === 'error') &&
+                uploadRecovery.canRetry)) && (
+              <button
+                type="button"
+                data-testid="retry-upload-btn"
+                onClick={handleRetryStuckUpload}
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-[#5A1A2C] hover:bg-[#42111F] text-[#FBF3EA] text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <RotateCcw className="h-4 w-4 text-[#E2B96F] shrink-0" />
+                <span>
+                  {uploadRecovery.status === 'stalled' ? 'Cancel & Retry Now' : 'Retry Upload'}
+                </span>
+              </button>
+            )}
+
+            {(uploadRecovery.status === 'cancelled' || uploadRecovery.status === 'error') && (
+              <button
+                type="button"
+                onClick={() => {
+                  dispatchUploadRecovery({ type: 'RESET' });
+                  setQuotaErrorBanner('');
+                }}
+                className="min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold underline cursor-pointer"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Readiness Checklist */}
       <div className="rounded-2xl bg-[#F5E7D8] border border-[#DCC397] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

@@ -19,8 +19,476 @@ export const CHUNKED_UPLOAD_THRESHOLD_BYTES = 256 * 1024;
 // Idle-only stall watchdog: resets on every XHR upload progress packet so slow healthy
 // connections never get falsely killed mid-transfer.
 export const UPLOAD_STALL_TIMEOUT_MS = 45_000;
+// Mid-process UI warning threshold: if no bytes advance for 12s mid-upload, surface
+// proactive Cancel & Retry controls so users are never stuck waiting blindly.
+export const MID_PROCESS_STALL_WARNING_MS = 12_000;
 export const FIREBASE_SDK_STALL_TIMEOUT_MS = 8_000;
 export const INLINE_DATA_URI_MAX_BYTES = 750 * 1024; // 750 KB max for inline base64 Data URI
+
+export type UploadPhase =
+  | 'init'
+  | 'compress'
+  | 'stage'
+  | 'upload-start'
+  | 'mid-process-progress'
+  | 'mid-process-retry'
+  | 'mid-process-timeout'
+  | 'mid-process-error'
+  | 'transport-fallback'
+  | 'cancelled'
+  | 'finalize'
+  | 'firestore-sync'
+  | 'complete';
+
+export type UploadTransport =
+  | 'staging'
+  | 'chunked-binary'
+  | 'raw-stream'
+  | 'chunked-json'
+  | 'firebase-sdk'
+  | 'local-vault'
+  | 'firestore';
+
+export type UploadLogLevel = 'info' | 'warn' | 'error';
+
+export interface UploadLogEntry {
+  timestamp: string;
+  sessionId: string;
+  level: UploadLogLevel;
+  phase: UploadPhase;
+  transport: UploadTransport;
+  projectSlug: string;
+  fileName: string;
+  kind: 'images' | 'video' | 'voice' | 'music' | 'project';
+  fileSizeBytes: number;
+  percent: number;
+  elapsedMs: number;
+  idleMs: number;
+  chunkIndex?: number;
+  totalChunks?: number;
+  attempt?: number;
+  httpStatus?: number;
+  readyState?: number;
+  throughputKBps?: number;
+  online?: boolean;
+  message: string;
+  errorName?: string;
+  errorMessage?: string;
+}
+
+export interface UploadPhaseProgressEvent {
+  sessionId: string;
+  phase: UploadPhase;
+  transport: UploadTransport;
+  detail: string;
+  percent: number;
+  chunkIndex?: number;
+  totalChunks?: number;
+  fileName: string;
+}
+
+export class UploadCancelledError extends Error {
+  readonly phase: UploadPhase;
+  readonly percentAtCancel: number;
+
+  constructor(
+    message = 'Upload cancelled by user.',
+    phase: UploadPhase = 'cancelled',
+    percentAtCancel = 0
+  ) {
+    super(message);
+    this.name = 'UploadCancelledError';
+    this.phase = phase;
+    this.percentAtCancel = percentAtCancel;
+  }
+}
+
+export class UploadTimeoutError extends Error {
+  readonly phase: UploadPhase;
+  readonly transport: UploadTransport;
+  readonly percentAtTimeout: number;
+  readonly chunkIndex?: number;
+  readonly totalChunks?: number;
+  readonly idleMs: number;
+  readonly elapsedMs: number;
+
+  constructor(params: {
+    message: string;
+    phase: UploadPhase;
+    transport: UploadTransport;
+    percentAtTimeout: number;
+    chunkIndex?: number;
+    totalChunks?: number;
+    idleMs: number;
+    elapsedMs: number;
+  }) {
+    super(params.message);
+    this.name = 'UploadTimeoutError';
+    this.phase = params.phase;
+    this.transport = params.transport;
+    this.percentAtTimeout = params.percentAtTimeout;
+    this.chunkIndex = params.chunkIndex;
+    this.totalChunks = params.totalChunks;
+    this.idleMs = params.idleMs;
+    this.elapsedMs = params.elapsedMs;
+  }
+}
+
+export function isUploadCancelledError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof UploadCancelledError) return true;
+  if (err instanceof Error) {
+    if (err.name === 'UploadCancelledError' || err.name === 'AbortError') return true;
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes('upload was cancelled') ||
+      msg.includes('upload cancelled') ||
+      msg.includes('user_cancelled') ||
+      msg.includes('aborted by user')
+    );
+  }
+  return false;
+}
+
+export function isUploadTimeoutError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof UploadTimeoutError) return true;
+  if (err instanceof Error) {
+    if (err.name === 'UploadTimeoutError') return true;
+    const msg = err.message.toLowerCase();
+    return msg.includes('timed out') || msg.includes('timeout') || msg.includes('stalled');
+  }
+  return false;
+}
+
+const MAX_UPLOAD_LOG_BUFFER = 150;
+const recentUploadLogs: UploadLogEntry[] = [];
+
+export function getRecentUploadLogs(): UploadLogEntry[] {
+  return [...recentUploadLogs];
+}
+
+export function clearRecentUploadLogs(): void {
+  recentUploadLogs.length = 0;
+}
+
+export function createUploadSessionLogger(meta: {
+  sessionId?: string;
+  projectSlug: string;
+  fileName: string;
+  kind: 'images' | 'video' | 'voice' | 'music' | 'project';
+  fileSizeBytes: number;
+  silentConsole?: boolean;
+}) {
+  const sessionId = meta.sessionId || createUploadSessionId();
+  const startedAtMs = Date.now();
+  let lastActivityAtMs = startedAtMs;
+  let lastPercent = 0;
+  let lastPhase: UploadPhase = 'init';
+  let lastTransport: UploadTransport = 'staging';
+  let lastChunkIndex: number | undefined;
+  let totalChunks: number | undefined;
+
+  const log = (
+    level: UploadLogLevel,
+    phase: UploadPhase,
+    message: string,
+    extra: {
+      transport?: UploadTransport;
+      percent?: number;
+      chunkIndex?: number;
+      totalChunks?: number;
+      attempt?: number;
+      httpStatus?: number;
+      readyState?: number;
+      bytesTransferred?: number;
+      error?: unknown;
+    } = {}
+  ): UploadLogEntry => {
+    const now = Date.now();
+    const elapsedMs = Math.max(0, now - startedAtMs);
+    const idleMs = Math.max(0, now - lastActivityAtMs);
+
+    if (typeof extra.percent === 'number' && Number.isFinite(extra.percent)) {
+      lastPercent = Math.max(0, Math.min(100, Math.round(extra.percent)));
+    }
+    if (extra.transport) lastTransport = extra.transport;
+    if (typeof extra.chunkIndex === 'number') lastChunkIndex = extra.chunkIndex;
+    if (typeof extra.totalChunks === 'number') totalChunks = extra.totalChunks;
+    lastPhase = phase;
+
+    if (
+      phase === 'mid-process-progress' ||
+      phase === 'upload-start' ||
+      phase === 'finalize' ||
+      phase === 'complete'
+    ) {
+      lastActivityAtMs = now;
+    }
+
+    const throughputKBps =
+      typeof extra.bytesTransferred === 'number' && elapsedMs > 0
+        ? Math.round((extra.bytesTransferred / 1024 / (elapsedMs / 1000)) * 10) / 10
+        : undefined;
+
+    const online =
+      typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean'
+        ? navigator.onLine
+        : undefined;
+
+    const errObj = extra.error instanceof Error ? extra.error : null;
+    const entry: UploadLogEntry = {
+      timestamp: new Date(now).toISOString(),
+      sessionId,
+      level,
+      phase,
+      transport: lastTransport,
+      projectSlug: meta.projectSlug || 'general',
+      fileName: meta.fileName,
+      kind: meta.kind,
+      fileSizeBytes: meta.fileSizeBytes,
+      percent: lastPercent,
+      elapsedMs,
+      idleMs,
+      ...(typeof lastChunkIndex === 'number' ? { chunkIndex: lastChunkIndex } : {}),
+      ...(typeof totalChunks === 'number' ? { totalChunks } : {}),
+      ...(typeof extra.attempt === 'number' ? { attempt: extra.attempt } : {}),
+      ...(typeof extra.httpStatus === 'number' ? { httpStatus: extra.httpStatus } : {}),
+      ...(typeof extra.readyState === 'number' ? { readyState: extra.readyState } : {}),
+      ...(typeof throughputKBps === 'number' ? { throughputKBps } : {}),
+      ...(typeof online === 'boolean' ? { online } : {}),
+      message,
+      ...(errObj ? { errorName: errObj.name, errorMessage: errObj.message } : {}),
+      ...(!errObj && extra.error ? { errorMessage: String(extra.error) } : {}),
+    };
+
+    recentUploadLogs.push(entry);
+    if (recentUploadLogs.length > MAX_UPLOAD_LOG_BUFFER) {
+      recentUploadLogs.splice(0, recentUploadLogs.length - MAX_UPLOAD_LOG_BUFFER);
+    }
+
+    if (!meta.silentConsole && typeof console !== 'undefined') {
+      const tag = `[SiteBuilderUpload][${sessionId}][${phase}]`;
+      if (level === 'error') {
+        console.error(tag, message, entry);
+      } else if (level === 'warn') {
+        console.warn(tag, message, entry);
+      } else {
+        console.info(tag, message, entry);
+      }
+    }
+
+    return entry;
+  };
+
+  return {
+    sessionId,
+    getSnapshot: () => ({
+      sessionId,
+      startedAtMs,
+      lastActivityAtMs,
+      elapsedMs: Math.max(0, Date.now() - startedAtMs),
+      idleMs: Math.max(0, Date.now() - lastActivityAtMs),
+      lastPercent,
+      lastPhase,
+      lastTransport,
+      lastChunkIndex,
+      totalChunks,
+    }),
+    info: (
+      phase: UploadPhase,
+      message: string,
+      extra?: Parameters<typeof log>[3]
+    ) => log('info', phase, message, extra),
+    warn: (
+      phase: UploadPhase,
+      message: string,
+      extra?: Parameters<typeof log>[3]
+    ) => log('warn', phase, message, extra),
+    error: (
+      phase: UploadPhase,
+      message: string,
+      extra?: Parameters<typeof log>[3]
+    ) => log('error', phase, message, extra),
+  };
+}
+
+export type UploadRecoveryStatus =
+  | 'idle'
+  | 'staging'
+  | 'uploading'
+  | 'stalled'
+  | 'cancelled'
+  | 'error'
+  | 'success';
+
+export interface UploadRecoveryState {
+  status: UploadRecoveryStatus;
+  sessionId: string | null;
+  phase: string;
+  activeFileName: string;
+  percent: number;
+  totalFiles: number;
+  completedFiles: number;
+  startedAtMs: number | null;
+  lastActivityAtMs: number | null;
+  errorMessage: string;
+  failurePhase: string;
+  percentAtFailure: number | null;
+  canRetry: boolean;
+}
+
+export const INITIAL_UPLOAD_RECOVERY_STATE: UploadRecoveryState = {
+  status: 'idle',
+  sessionId: null,
+  phase: '',
+  activeFileName: '',
+  percent: 0,
+  totalFiles: 0,
+  completedFiles: 0,
+  startedAtMs: null,
+  lastActivityAtMs: null,
+  errorMessage: '',
+  failurePhase: '',
+  percentAtFailure: null,
+  canRetry: false,
+};
+
+export type UploadRecoveryAction =
+  | {
+      type: 'START';
+      mode: 'staging' | 'uploading';
+      sessionId: string;
+      totalFiles: number;
+      phase: string;
+      activeFileName?: string;
+      nowMs?: number;
+    }
+  | {
+      type: 'PROGRESS';
+      percent: number;
+      phase?: string;
+      activeFileName?: string;
+      completedFiles?: number;
+      nowMs?: number;
+    }
+  | {
+      type: 'MARK_STALLED';
+      nowMs?: number;
+    }
+  | {
+      type: 'CANCEL';
+      reason?: string;
+      canRetry?: boolean;
+    }
+  | {
+      type: 'FAIL';
+      errorMessage: string;
+      failurePhase?: string;
+      canRetry?: boolean;
+    }
+  | {
+      type: 'COMPLETE';
+      phase?: string;
+    }
+  | {
+      type: 'RESET';
+    };
+
+export function reduceUploadRecoveryState(
+  state: UploadRecoveryState,
+  action: UploadRecoveryAction
+): UploadRecoveryState {
+  switch (action.type) {
+    case 'START': {
+      const now = action.nowMs ?? Date.now();
+      return {
+        status: action.mode,
+        sessionId: action.sessionId,
+        phase: action.phase,
+        activeFileName: action.activeFileName || '',
+        percent: action.mode === 'uploading' ? 5 : 0,
+        totalFiles: Math.max(0, action.totalFiles),
+        completedFiles: 0,
+        startedAtMs: now,
+        lastActivityAtMs: now,
+        errorMessage: '',
+        failurePhase: '',
+        percentAtFailure: null,
+        canRetry: false,
+      };
+    }
+    case 'PROGRESS': {
+      if (state.status !== 'uploading' && state.status !== 'staging' && state.status !== 'stalled') {
+        return state;
+      }
+      const now = action.nowMs ?? Date.now();
+      const clamped = Math.max(0, Math.min(100, Math.round(action.percent)));
+      return {
+        ...state,
+        status: state.status === 'stalled' ? 'uploading' : state.status,
+        percent: Math.max(state.percent, clamped),
+        phase: action.phase ?? state.phase,
+        activeFileName: action.activeFileName ?? state.activeFileName,
+        completedFiles:
+          typeof action.completedFiles === 'number'
+            ? action.completedFiles
+            : state.completedFiles,
+        lastActivityAtMs: now,
+      };
+    }
+    case 'MARK_STALLED': {
+      if (state.status !== 'uploading' && state.status !== 'staging') {
+        return state;
+      }
+      return {
+        ...state,
+        status: 'stalled',
+        canRetry: true,
+      };
+    }
+    case 'CANCEL': {
+      return {
+        ...state,
+        status: 'cancelled',
+        errorMessage:
+          action.reason ||
+          'Upload cancelled. Your selected files are still safely staged — tap Retry Upload whenever you are ready.',
+        failurePhase: state.phase || 'mid-process',
+        percentAtFailure: state.percent,
+        canRetry: action.canRetry ?? true,
+      };
+    }
+    case 'FAIL': {
+      return {
+        ...state,
+        status: 'error',
+        errorMessage: action.errorMessage,
+        failurePhase: action.failurePhase || state.phase || 'mid-process',
+        percentAtFailure: state.percent,
+        canRetry: action.canRetry ?? true,
+      };
+    }
+    case 'COMPLETE': {
+      return {
+        ...state,
+        status: 'success',
+        percent: 100,
+        completedFiles: state.totalFiles,
+        phase: action.phase || 'Upload complete',
+        errorMessage: '',
+        failurePhase: '',
+        percentAtFailure: null,
+        canRetry: false,
+      };
+    }
+    case 'RESET': {
+      return { ...INITIAL_UPLOAD_RECOVERY_STATE };
+    }
+    default:
+      return state;
+  }
+}
 
 /**
  * Decides whether to use chunked upload immediately rather than a single-shot request.
@@ -217,6 +685,20 @@ export function formatUploadErrorMessage(
   err: unknown,
   fallback = 'Upload failed — please try again.'
 ): string {
+  if (isUploadCancelledError(err)) {
+    return 'Upload cancelled. Your files are still safely staged — tap Retry Upload whenever you are ready.';
+  }
+
+  if (err instanceof UploadTimeoutError) {
+    const chunkInfo =
+      typeof err.chunkIndex === 'number' && typeof err.totalChunks === 'number'
+        ? ` on chunk ${err.chunkIndex + 1} of ${err.totalChunks}`
+        : '';
+    return `Upload timed out${chunkInfo} at ${err.percentAtTimeout}% after ${Math.round(
+      err.idleMs / 1000
+    )}s without network activity. Tap Retry Upload to continue.`;
+  }
+
   const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
   const msg = raw.trim();
   if (!msg) return fallback;

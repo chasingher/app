@@ -59,12 +59,18 @@ import {
   computeChunkedUploadProgress,
   createStallWatchdog,
   createUploadSessionId,
+  createUploadSessionLogger,
   DEFAULT_UPLOAD_CHUNK_BYTES,
   FIREBASE_SDK_STALL_TIMEOUT_MS,
   formatUploadErrorMessage,
   isBucketNotProvisionedError,
+  isUploadCancelledError,
   shouldUseChunkedUpload,
   UPLOAD_STALL_TIMEOUT_MS,
+  UploadCancelledError,
+  UploadPhaseProgressEvent,
+  UploadTimeoutError,
+  UploadTransport,
 } from './uploadPipeline';
 import {
   clearLocalVaultMedia,
@@ -755,11 +761,36 @@ function sendXhrChunk(params: {
   url: string;
   body: Blob | string;
   headers: Record<string, string>;
+  transport: UploadTransport;
+  chunkIndex: number;
+  totalChunks: number;
+  signal?: AbortSignal;
+  logger: ReturnType<typeof createUploadSessionLogger>;
   onUploadFraction?: (fraction: number) => void;
 }): Promise<ChunkUploadResult> {
+  const throwIfAborted = () => {
+    if (params.signal?.aborted) {
+      const snap = params.logger.getSnapshot();
+      throw new UploadCancelledError(
+        'Upload cancelled by user during chunk transfer.',
+        'cancelled',
+        snap.lastPercent
+      );
+    }
+  };
+
+  throwIfAborted();
+
   if (typeof XMLHttpRequest === 'undefined') {
     const controller = new AbortController();
-    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => controller.abort());
+    let stalledOut = false;
+    const onExternalAbort = () => controller.abort();
+    params.signal?.addEventListener('abort', onExternalAbort, { once: true });
+
+    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
+      stalledOut = true;
+      controller.abort();
+    });
     return fetch(params.url, {
       method: 'POST',
       credentials: 'include',
@@ -769,12 +800,20 @@ function sendXhrChunk(params: {
     })
       .then(async (res) => {
         watchdog.stop();
+        params.signal?.removeEventListener('abort', onExternalAbort);
         const ct = res.headers.get('content-type') || '';
         if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
           throw new BackendUploadUnavailableError(`Upload API unavailable (${res.status}).`);
         }
         const payload = await res.json().catch(() => ({}));
         if (!res.ok) {
+          params.logger.error('mid-process-error', `Chunk ${params.chunkIndex + 1}/${params.totalChunks} HTTP error`, {
+            transport: params.transport,
+            chunkIndex: params.chunkIndex,
+            totalChunks: params.totalChunks,
+            httpStatus: res.status,
+            error: payload?.error || `HTTP ${res.status}`,
+          });
           throw new Error(payload?.error || `Chunk upload failed (${res.status})`);
         }
         params.onUploadFraction?.(1);
@@ -782,6 +821,24 @@ function sendXhrChunk(params: {
       })
       .catch((err) => {
         watchdog.stop();
+        params.signal?.removeEventListener('abort', onExternalAbort);
+        if (params.signal?.aborted) {
+          const snap = params.logger.getSnapshot();
+          throw new UploadCancelledError('Upload cancelled by user.', 'cancelled', snap.lastPercent);
+        }
+        if (stalledOut) {
+          const snap = params.logger.getSnapshot();
+          throw new UploadTimeoutError({
+            message: `Chunk ${params.chunkIndex + 1}/${params.totalChunks} transfer timed out with no activity.`,
+            phase: 'mid-process-timeout',
+            transport: params.transport,
+            percentAtTimeout: snap.lastPercent,
+            chunkIndex: params.chunkIndex,
+            totalChunks: params.totalChunks,
+            idleMs: UPLOAD_STALL_TIMEOUT_MS,
+            elapsedMs: snap.elapsedMs,
+          });
+        }
         throw err;
       });
   }
@@ -790,32 +847,97 @@ function sendXhrChunk(params: {
     const xhr = new XMLHttpRequest();
     let settled = false;
     let stalledOut = false;
+    let userAborted = false;
+
+    const cleanup = () => {
+      watchdog.stop();
+      params.signal?.removeEventListener('abort', handleExternalAbort);
+    };
 
     const finishReject = (err: Error) => {
       if (settled) return;
       settled = true;
-      watchdog.stop();
+      cleanup();
       reject(err);
     };
 
     const finishResolve = (val: ChunkUploadResult) => {
       if (settled) return;
       settled = true;
-      watchdog.stop();
+      cleanup();
       resolve(val);
+    };
+
+    const handleExternalAbort = () => {
+      userAborted = true;
+      const snap = params.logger.getSnapshot();
+      params.logger.warn(
+        'cancelled',
+        `Aborting XHR mid-process on chunk ${params.chunkIndex + 1}/${params.totalChunks} at ${snap.lastPercent}%`,
+        {
+          transport: params.transport,
+          chunkIndex: params.chunkIndex,
+          totalChunks: params.totalChunks,
+          readyState: xhr.readyState,
+        }
+      );
+      try {
+        xhr.abort();
+      } catch {
+        // ignore
+      }
+      finishReject(
+        new UploadCancelledError(
+          'Upload cancelled by user.',
+          'cancelled',
+          snap.lastPercent
+        )
+      );
     };
 
     // Idle-only watchdog: resets on every single outgoing packet so slow healthy
     // connections never time out while data is actively flowing.
     const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
       stalledOut = true;
+      const snap = params.logger.getSnapshot();
+      params.logger.error(
+        'mid-process-timeout',
+        `Chunk ${params.chunkIndex + 1}/${params.totalChunks} stalled with zero bytes transferred for ${Math.round(
+          UPLOAD_STALL_TIMEOUT_MS / 1000
+        )}s (readyState=${xhr.readyState})`,
+        {
+          transport: params.transport,
+          chunkIndex: params.chunkIndex,
+          totalChunks: params.totalChunks,
+          readyState: xhr.readyState,
+        }
+      );
       try {
         xhr.abort();
       } catch {
         // ignore
       }
-      finishReject(new Error('Chunk transfer stalled with zero bytes sent for 45s.'));
+      finishReject(
+        new UploadTimeoutError({
+          message: `Chunk ${params.chunkIndex + 1}/${params.totalChunks} stalled with zero bytes sent for 45s.`,
+          phase: 'mid-process-timeout',
+          transport: params.transport,
+          percentAtTimeout: snap.lastPercent,
+          chunkIndex: params.chunkIndex,
+          totalChunks: params.totalChunks,
+          idleMs: UPLOAD_STALL_TIMEOUT_MS,
+          elapsedMs: snap.elapsedMs,
+        })
+      );
     });
+
+    if (params.signal) {
+      if (params.signal.aborted) {
+        handleExternalAbort();
+        return;
+      }
+      params.signal.addEventListener('abort', handleExternalAbort, { once: true });
+    }
 
     xhr.open('POST', params.url, true);
     xhr.withCredentials = true;
@@ -841,6 +963,17 @@ function sendXhrChunk(params: {
     xhr.onload = () => {
       const ct = xhr.getResponseHeader('content-type') || '';
       if (xhr.status === 404 || xhr.status === 405 || !ct.includes('application/json')) {
+        params.logger.warn(
+          'mid-process-error',
+          `Chunk ${params.chunkIndex + 1}/${params.totalChunks} received non-API response (${xhr.status})`,
+          {
+            transport: params.transport,
+            chunkIndex: params.chunkIndex,
+            totalChunks: params.totalChunks,
+            httpStatus: xhr.status,
+            readyState: xhr.readyState,
+          }
+        );
         finishReject(new BackendUploadUnavailableError(`Upload API unavailable (${xhr.status}).`));
         return;
       }
@@ -848,29 +981,102 @@ function sendXhrChunk(params: {
         try {
           const parsed = JSON.parse(xhr.responseText) as ChunkUploadResult;
           if (!parsed?.ok) {
+            params.logger.error(
+              'mid-process-error',
+              `Server rejected chunk ${params.chunkIndex + 1}/${params.totalChunks} payload`,
+              {
+                transport: params.transport,
+                chunkIndex: params.chunkIndex,
+                totalChunks: params.totalChunks,
+                httpStatus: xhr.status,
+              }
+            );
             finishReject(new Error('Invalid chunk response from server'));
             return;
           }
           params.onUploadFraction?.(1);
           finishResolve(parsed);
-        } catch {
+        } catch (parseErr) {
+          params.logger.error(
+            'mid-process-error',
+            `Malformed JSON response on chunk ${params.chunkIndex + 1}/${params.totalChunks}`,
+            {
+              transport: params.transport,
+              chunkIndex: params.chunkIndex,
+              totalChunks: params.totalChunks,
+              httpStatus: xhr.status,
+              error: parseErr,
+            }
+          );
           finishReject(new Error('Invalid chunk response from server'));
         }
       } else {
+        let serverMsg = `Chunk upload failed (${xhr.status})`;
         try {
           const errBody = JSON.parse(xhr.responseText);
-          finishReject(new Error(errBody.error || `Chunk upload failed (${xhr.status})`));
+          if (errBody?.error) serverMsg = errBody.error;
         } catch {
-          finishReject(new Error(`Chunk upload failed (${xhr.status})`));
+          // ignore
         }
+        params.logger.error(
+          'mid-process-error',
+          `HTTP ${xhr.status} while uploading chunk ${params.chunkIndex + 1}/${params.totalChunks}: ${serverMsg}`,
+          {
+            transport: params.transport,
+            chunkIndex: params.chunkIndex,
+            totalChunks: params.totalChunks,
+            httpStatus: xhr.status,
+            readyState: xhr.readyState,
+            error: serverMsg,
+          }
+        );
+        finishReject(new Error(serverMsg));
       }
     };
 
-    xhr.onerror = () => finishReject(new Error('Network error while transferring chunk'));
-    xhr.onabort = () =>
-      finishReject(
-        new Error(stalledOut ? 'Upload stalled with no progress.' : 'Upload was cancelled')
+    xhr.onerror = () => {
+      params.logger.error(
+        'mid-process-error',
+        `Network error mid-process on chunk ${params.chunkIndex + 1}/${params.totalChunks} (readyState=${xhr.readyState})`,
+        {
+          transport: params.transport,
+          chunkIndex: params.chunkIndex,
+          totalChunks: params.totalChunks,
+          readyState: xhr.readyState,
+        }
       );
+      finishReject(
+        new Error(
+          `Network error while transferring chunk ${params.chunkIndex + 1} of ${params.totalChunks}`
+        )
+      );
+    };
+
+    xhr.onabort = () => {
+      if (userAborted) {
+        const snap = params.logger.getSnapshot();
+        finishReject(new UploadCancelledError('Upload cancelled by user.', 'cancelled', snap.lastPercent));
+        return;
+      }
+      if (stalledOut) {
+        const snap = params.logger.getSnapshot();
+        finishReject(
+          new UploadTimeoutError({
+            message: `Chunk ${params.chunkIndex + 1}/${params.totalChunks} stalled with no progress.`,
+            phase: 'mid-process-timeout',
+            transport: params.transport,
+            percentAtTimeout: snap.lastPercent,
+            chunkIndex: params.chunkIndex,
+            totalChunks: params.totalChunks,
+            idleMs: UPLOAD_STALL_TIMEOUT_MS,
+            elapsedMs: snap.elapsedMs,
+          })
+        );
+        return;
+      }
+      finishReject(new Error('Upload was aborted unexpectedly during transfer'));
+    };
+
     xhr.send(params.body);
   });
 }
@@ -885,22 +1091,68 @@ async function streamChunkedFileUpload(params: {
   height: number;
   headers: Record<string, string>;
   useJsonTransport?: boolean;
+  signal?: AbortSignal;
+  logger: ReturnType<typeof createUploadSessionLogger>;
   onProgress?: (percent: number) => void;
+  onPhaseChange?: (event: UploadPhaseProgressEvent) => void;
 }): Promise<RawUploadResponse> {
   const plan = buildChunkPlan(params.file.size, DEFAULT_UPLOAD_CHUNK_BYTES);
   if (plan.totalChunks === 0) {
     throw new Error('Selected file is empty.');
   }
 
-  const uploadId = createUploadSessionId();
+  const transport: UploadTransport = params.useJsonTransport ? 'chunked-json' : 'chunked-binary';
+  const uploadId = params.logger.sessionId || createUploadSessionId();
   let finalResponse: RawUploadResponse | null = null;
+  let bytesSent = 0;
+
+  params.logger.info(
+    'upload-start',
+    `Starting ${transport} upload: ${plan.totalChunks} chunk${plan.totalChunks > 1 ? 's' : ''} (${Math.round(
+      plan.totalBytes / 1024
+    )} KB total)`,
+    {
+      transport,
+      totalChunks: plan.totalChunks,
+      percent: 5,
+    }
+  );
 
   for (const slice of plan.slices) {
+    if (params.signal?.aborted) {
+      const snap = params.logger.getSnapshot();
+      throw new UploadCancelledError(
+        'Upload cancelled by user.',
+        'cancelled',
+        snap.lastPercent
+      );
+    }
+
     const chunkBlob = params.file.slice(slice.start, slice.end);
     let chunkResult: ChunkUploadResult | null = null;
     let lastChunkErr: unknown = null;
 
+    params.onPhaseChange?.({
+      sessionId: uploadId,
+      phase: 'mid-process-progress',
+      transport,
+      detail: `Uploading chunk ${slice.index + 1} of ${plan.totalChunks}…`,
+      percent: computeChunkedUploadProgress(slice.index, plan.totalChunks, 0),
+      chunkIndex: slice.index,
+      totalChunks: plan.totalChunks,
+      fileName: params.file.name,
+    });
+
     for (let attempt = 0; attempt <= 2; attempt++) {
+      if (params.signal?.aborted) {
+        const snap = params.logger.getSnapshot();
+        throw new UploadCancelledError(
+          'Upload cancelled by user.',
+          'cancelled',
+          snap.lastPercent
+        );
+      }
+
       try {
         if (params.useJsonTransport) {
           const buf = await chunkBlob.arrayBuffer();
@@ -923,6 +1175,11 @@ async function streamChunkedFileUpload(params: {
             url: '/api/firebase/upload-chunk-json',
             body: payload,
             headers: { 'Content-Type': 'application/json' },
+            transport,
+            chunkIndex: slice.index,
+            totalChunks: plan.totalChunks,
+            signal: params.signal,
+            logger: params.logger,
             onUploadFraction: (frac) => {
               params.onProgress?.(
                 computeChunkedUploadProgress(slice.index, plan.totalChunks, frac)
@@ -941,6 +1198,11 @@ async function streamChunkedFileUpload(params: {
               'x-chunk-index': String(slice.index),
               'x-total-chunks': String(plan.totalChunks),
             },
+            transport,
+            chunkIndex: slice.index,
+            totalChunks: plan.totalChunks,
+            signal: params.signal,
+            logger: params.logger,
             onUploadFraction: (frac) => {
               params.onProgress?.(
                 computeChunkedUploadProgress(slice.index, plan.totalChunks, frac)
@@ -951,6 +1213,9 @@ async function streamChunkedFileUpload(params: {
         break;
       } catch (err) {
         lastChunkErr = err;
+        if (isUploadCancelledError(err) || params.signal?.aborted) {
+          throw err;
+        }
         if (err instanceof BackendUploadUnavailableError) {
           throw err;
         }
@@ -958,19 +1223,73 @@ async function streamChunkedFileUpload(params: {
           throw err;
         }
         if (attempt < 2) {
-          await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
+          const backoffMs = 350 * (attempt + 1);
+          params.logger.warn(
+            'mid-process-retry',
+            `Chunk ${slice.index + 1}/${plan.totalChunks} failed (attempt ${attempt + 1}/3); retrying in ${backoffMs}ms`,
+            {
+              transport,
+              chunkIndex: slice.index,
+              totalChunks: plan.totalChunks,
+              attempt: attempt + 1,
+              error: err,
+            }
+          );
+          params.onPhaseChange?.({
+            sessionId: uploadId,
+            phase: 'mid-process-retry',
+            transport,
+            detail: `Retrying chunk ${slice.index + 1} of ${plan.totalChunks} (attempt ${attempt + 2}/3)…`,
+            percent: computeChunkedUploadProgress(slice.index, plan.totalChunks, 0),
+            chunkIndex: slice.index,
+            totalChunks: plan.totalChunks,
+            fileName: params.file.name,
+          });
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              params.signal?.removeEventListener('abort', onAbortDuringBackoff);
+              resolve();
+            }, backoffMs);
+            const onAbortDuringBackoff = () => {
+              clearTimeout(timer);
+              const snap = params.logger.getSnapshot();
+              reject(new UploadCancelledError('Upload cancelled during retry backoff.', 'cancelled', snap.lastPercent));
+            };
+            params.signal?.addEventListener('abort', onAbortDuringBackoff, { once: true });
+          });
         }
       }
     }
 
     if (!chunkResult) {
+      params.logger.error(
+        'mid-process-error',
+        `Chunk ${slice.index + 1}/${plan.totalChunks} exhausted all 3 attempts`,
+        {
+          transport,
+          chunkIndex: slice.index,
+          totalChunks: plan.totalChunks,
+          error: lastChunkErr,
+        }
+      );
       throw lastChunkErr instanceof Error
         ? lastChunkErr
-        : new Error('Chunk upload failed after retries.');
+        : new Error(`Chunk ${slice.index + 1} of ${plan.totalChunks} upload failed after retries.`);
     }
 
-    params.onProgress?.(
-      computeChunkedUploadProgress(slice.index, plan.totalChunks, 1)
+    bytesSent += slice.size;
+    const chunkDonePct = computeChunkedUploadProgress(slice.index, plan.totalChunks, 1);
+    params.onProgress?.(chunkDonePct);
+    params.logger.info(
+      'mid-process-progress',
+      `Chunk ${slice.index + 1}/${plan.totalChunks} confirmed (${chunkDonePct}%)`,
+      {
+        transport,
+        chunkIndex: slice.index,
+        totalChunks: plan.totalChunks,
+        percent: chunkDonePct,
+        bytesTransferred: bytesSent,
+      }
     );
 
     if (chunkResult.completed && chunkResult.object) {
@@ -979,9 +1298,18 @@ async function streamChunkedFileUpload(params: {
   }
 
   if (!finalResponse) {
+    params.logger.error('mid-process-error', 'All chunks uploaded but server did not return finalized object', {
+      transport,
+      totalChunks: plan.totalChunks,
+    });
     throw new Error('Server did not finalize the uploaded file.');
   }
 
+  params.logger.info('finalize', `Server assembled & committed ${params.file.name}`, {
+    transport,
+    percent: 100,
+    bytesTransferred: bytesSent,
+  });
   params.onProgress?.(100);
   return finalResponse;
 }
@@ -989,11 +1317,43 @@ async function streamChunkedFileUpload(params: {
 function streamRawFileUpload(params: {
   file: File;
   headers: Record<string, string>;
+  signal?: AbortSignal;
+  logger: ReturnType<typeof createUploadSessionLogger>;
   onProgress?: (percent: number) => void;
+  onPhaseChange?: (event: UploadPhaseProgressEvent) => void;
 }): Promise<RawUploadResponse> {
+  const transport: UploadTransport = 'raw-stream';
+  if (params.signal?.aborted) {
+    const snap = params.logger.getSnapshot();
+    return Promise.reject(
+      new UploadCancelledError('Upload cancelled by user.', 'cancelled', snap.lastPercent)
+    );
+  }
+
+  params.logger.info(
+    'upload-start',
+    `Starting raw-stream upload (${Math.round(params.file.size / 1024)} KB)`,
+    { transport, percent: 5 }
+  );
+  params.onPhaseChange?.({
+    sessionId: params.logger.sessionId,
+    phase: 'upload-start',
+    transport,
+    detail: `Streaming ${params.file.name}…`,
+    percent: 5,
+    fileName: params.file.name,
+  });
+
   if (typeof XMLHttpRequest === 'undefined') {
     const controller = new AbortController();
-    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => controller.abort());
+    let stalledOut = false;
+    const onExternalAbort = () => controller.abort();
+    params.signal?.addEventListener('abort', onExternalAbort, { once: true });
+
+    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
+      stalledOut = true;
+      controller.abort();
+    });
     return fetch('/api/firebase/upload-raw', {
       method: 'POST',
       credentials: 'include',
@@ -1003,6 +1363,7 @@ function streamRawFileUpload(params: {
     })
       .then(async (res) => {
         watchdog.stop();
+        params.signal?.removeEventListener('abort', onExternalAbort);
         const ct = res.headers.get('content-type') || '';
         if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
           throw new BackendUploadUnavailableError(`Upload API unavailable (${res.status}).`);
@@ -1016,6 +1377,22 @@ function streamRawFileUpload(params: {
       })
       .catch((err) => {
         watchdog.stop();
+        params.signal?.removeEventListener('abort', onExternalAbort);
+        if (params.signal?.aborted) {
+          const snap = params.logger.getSnapshot();
+          throw new UploadCancelledError('Upload cancelled by user.', 'cancelled', snap.lastPercent);
+        }
+        if (stalledOut) {
+          const snap = params.logger.getSnapshot();
+          throw new UploadTimeoutError({
+            message: 'Raw stream upload timed out with no network progress.',
+            phase: 'mid-process-timeout',
+            transport,
+            percentAtTimeout: snap.lastPercent,
+            idleMs: UPLOAD_STALL_TIMEOUT_MS,
+            elapsedMs: snap.elapsedMs,
+          });
+        }
         throw err;
       });
   }
@@ -1024,30 +1401,76 @@ function streamRawFileUpload(params: {
     const xhr = new XMLHttpRequest();
     let settled = false;
     let stalledOut = false;
+    let userAborted = false;
+    let lastLoggedMilestone = 0;
+
+    const cleanup = () => {
+      watchdog.stop();
+      params.signal?.removeEventListener('abort', handleExternalAbort);
+    };
 
     const finishReject = (err: Error) => {
       if (settled) return;
       settled = true;
-      watchdog.stop();
+      cleanup();
       reject(err);
     };
 
     const finishResolve = (val: RawUploadResponse) => {
       if (settled) return;
       settled = true;
-      watchdog.stop();
+      cleanup();
       resolve(val);
     };
 
-    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
-      stalledOut = true;
+    const handleExternalAbort = () => {
+      userAborted = true;
+      const snap = params.logger.getSnapshot();
+      params.logger.warn(
+        'cancelled',
+        `User aborted raw-stream upload mid-process at ${snap.lastPercent}%`,
+        { transport, readyState: xhr.readyState }
+      );
       try {
         xhr.abort();
       } catch {
         // ignore
       }
-      finishReject(new Error('Upload stalled with no progress — switching transport.'));
+      finishReject(new UploadCancelledError('Upload cancelled by user.', 'cancelled', snap.lastPercent));
+    };
+
+    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
+      stalledOut = true;
+      const snap = params.logger.getSnapshot();
+      params.logger.error(
+        'mid-process-timeout',
+        `Raw stream upload stalled at ${snap.lastPercent}% with zero bytes sent for 45s (readyState=${xhr.readyState})`,
+        { transport, readyState: xhr.readyState }
+      );
+      try {
+        xhr.abort();
+      } catch {
+        // ignore
+      }
+      finishReject(
+        new UploadTimeoutError({
+          message: 'Upload stalled with no progress — switching transport.',
+          phase: 'mid-process-timeout',
+          transport,
+          percentAtTimeout: snap.lastPercent,
+          idleMs: UPLOAD_STALL_TIMEOUT_MS,
+          elapsedMs: snap.elapsedMs,
+        })
+      );
     });
+
+    if (params.signal) {
+      if (params.signal.aborted) {
+        handleExternalAbort();
+        return;
+      }
+      params.signal.addEventListener('abort', handleExternalAbort, { once: true });
+    }
 
     xhr.open('POST', '/api/firebase/upload-raw', true);
     xhr.withCredentials = true;
@@ -1062,12 +1485,32 @@ function streamRawFileUpload(params: {
       if (ev.lengthComputable && ev.total > 0) {
         const pct = Math.max(5, Math.min(99, Math.round((ev.loaded / ev.total) * 100)));
         params.onProgress?.(pct);
+        const milestone = Math.floor(pct / 25) * 25;
+        if (milestone >= 25 && milestone > lastLoggedMilestone) {
+          lastLoggedMilestone = milestone;
+          params.logger.info('mid-process-progress', `Raw stream reached ${pct}%`, {
+            transport,
+            percent: pct,
+            bytesTransferred: ev.loaded,
+          });
+        }
+      }
+    };
+
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState >= 2) {
+        watchdog.touch();
       }
     };
 
     xhr.onload = () => {
       const ct = xhr.getResponseHeader('content-type') || '';
       if (xhr.status === 404 || xhr.status === 405 || !ct.includes('application/json')) {
+        params.logger.warn('mid-process-error', `Raw upload API unavailable (${xhr.status})`, {
+          transport,
+          httpStatus: xhr.status,
+          readyState: xhr.readyState,
+        });
         finishReject(new BackendUploadUnavailableError(`Upload API unavailable (${xhr.status}).`));
         return;
       }
@@ -1078,26 +1521,70 @@ function streamRawFileUpload(params: {
             finishReject(new Error('Invalid upload response from server'));
             return;
           }
+          params.logger.info('finalize', `Raw stream upload finalized (${params.file.name})`, {
+            transport,
+            percent: 100,
+            bytesTransferred: params.file.size,
+          });
           params.onProgress?.(100);
           finishResolve(parsed);
-        } catch {
+        } catch (parseErr) {
+          params.logger.error('mid-process-error', 'Invalid JSON returned from raw upload endpoint', {
+            transport,
+            httpStatus: xhr.status,
+            error: parseErr,
+          });
           finishReject(new Error('Invalid upload response from server'));
         }
       } else {
+        let serverMsg = `Upload failed (${xhr.status})`;
         try {
           const errBody = JSON.parse(xhr.responseText);
-          finishReject(new Error(errBody.error || `Upload failed (${xhr.status})`));
+          if (errBody?.error) serverMsg = errBody.error;
         } catch {
-          finishReject(new Error(`Upload failed (${xhr.status})`));
+          // ignore
         }
+        params.logger.error('mid-process-error', `Raw upload HTTP ${xhr.status}: ${serverMsg}`, {
+          transport,
+          httpStatus: xhr.status,
+          readyState: xhr.readyState,
+          error: serverMsg,
+        });
+        finishReject(new Error(serverMsg));
       }
     };
 
-    xhr.onerror = () => finishReject(new Error('Network error while uploading media'));
-    xhr.onabort = () =>
-      finishReject(
-        new Error(stalledOut ? 'Upload stalled with no progress.' : 'Upload was cancelled')
-      );
+    xhr.onerror = () => {
+      params.logger.error('mid-process-error', `Network error during raw-stream upload (readyState=${xhr.readyState})`, {
+        transport,
+        readyState: xhr.readyState,
+      });
+      finishReject(new Error('Network error while uploading media'));
+    };
+
+    xhr.onabort = () => {
+      if (userAborted) {
+        const snap = params.logger.getSnapshot();
+        finishReject(new UploadCancelledError('Upload cancelled by user.', 'cancelled', snap.lastPercent));
+        return;
+      }
+      if (stalledOut) {
+        const snap = params.logger.getSnapshot();
+        finishReject(
+          new UploadTimeoutError({
+            message: 'Upload stalled with no progress.',
+            phase: 'mid-process-timeout',
+            transport,
+            percentAtTimeout: snap.lastPercent,
+            idleMs: UPLOAD_STALL_TIMEOUT_MS,
+            elapsedMs: snap.elapsedMs,
+          })
+        );
+        return;
+      }
+      finishReject(new Error('Upload was aborted unexpectedly'));
+    };
+
     xhr.send(params.file);
   });
 }
@@ -1135,10 +1622,21 @@ async function uploadViaFirebaseStorageSdk(params: {
   originalBytes: number;
   width: number;
   height: number;
+  signal?: AbortSignal;
+  logger: ReturnType<typeof createUploadSessionLogger>;
   onProgress?: (percent: number) => void;
 }): Promise<RawUploadResponse> {
+  if (params.signal?.aborted) {
+    const snap = params.logger.getSnapshot();
+    throw new UploadCancelledError('Upload cancelled by user.', 'cancelled', snap.lastPercent);
+  }
+
   const bucketReady = await isFirebaseStorageBucketProvisioned();
   if (!bucketReady) {
+    params.logger.warn('mid-process-error', `Firebase Storage bucket "${FIREBASE_STORAGE_BUCKET}" returned 404/unreachable`, {
+      transport: 'firebase-sdk',
+      httpStatus: 404,
+    });
     throw new Error('storage/bucket-not-found');
   }
 
@@ -1146,6 +1644,10 @@ async function uploadViaFirebaseStorageSdk(params: {
   const safeName = params.file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120);
   const objectKey = `${params.kind}/${safeSlug}/${Date.now()}-${safeName}`;
   const fileRef = storageRef(storage, objectKey);
+
+  params.logger.info('upload-start', `Starting direct Firebase Storage SDK upload (${objectKey})`, {
+    transport: 'firebase-sdk',
+  });
 
   const downloadUrl = await new Promise<string>((resolve, reject) => {
     let settled = false;
@@ -1156,9 +1658,35 @@ async function uploadViaFirebaseStorageSdk(params: {
       customMetadata: params.songTitle ? { songTitle: params.songTitle } : undefined,
     });
 
+    const cleanup = () => {
+      watchdog.stop();
+      params.signal?.removeEventListener('abort', handleExternalAbort);
+    };
+
+    const handleExternalAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const snap = params.logger.getSnapshot();
+      params.logger.warn('cancelled', `User cancelled Firebase Storage SDK upload at ${snap.lastPercent}%`, {
+        transport: 'firebase-sdk',
+      });
+      try {
+        task.cancel();
+      } catch {
+        // ignore
+      }
+      reject(new UploadCancelledError('Upload cancelled by user.', 'cancelled', snap.lastPercent));
+    };
+
     const watchdog = createStallWatchdog(FIREBASE_SDK_STALL_TIMEOUT_MS, () => {
       if (settled) return;
       settled = true;
+      cleanup();
+      const snap = params.logger.getSnapshot();
+      params.logger.error('mid-process-timeout', `Firebase Storage SDK stalled at ${snap.lastPercent}%`, {
+        transport: 'firebase-sdk',
+      });
       try {
         task.cancel();
       } catch {
@@ -1166,6 +1694,14 @@ async function uploadViaFirebaseStorageSdk(params: {
       }
       reject(new Error('storage/bucket-not-found'));
     });
+
+    if (params.signal) {
+      if (params.signal.aborted) {
+        handleExternalAbort();
+        return;
+      }
+      params.signal.addEventListener('abort', handleExternalAbort, { once: true });
+    }
 
     task.on(
       'state_changed',
@@ -1185,15 +1721,23 @@ async function uploadViaFirebaseStorageSdk(params: {
       (err) => {
         if (settled) return;
         settled = true;
-        watchdog.stop();
+        cleanup();
+        params.logger.error('mid-process-error', 'Firebase Storage SDK upload error', {
+          transport: 'firebase-sdk',
+          error: err,
+        });
         reject(err);
       },
       async () => {
         if (settled) return;
-        watchdog.stop();
+        cleanup();
         try {
           const url = await getDownloadURL(task.snapshot.ref);
           settled = true;
+          params.logger.info('finalize', 'Firebase Storage SDK download URL resolved', {
+            transport: 'firebase-sdk',
+            percent: 100,
+          });
           params.onProgress?.(100);
           resolve(url);
         } catch (urlErr) {
@@ -1233,8 +1777,11 @@ export async function uploadMediaToFirebase(params: {
   width?: number;
   height?: number;
   forcePreserveTransparency?: boolean;
+  signal?: AbortSignal;
+  sessionId?: string;
   onStatus?: (msg: string) => void;
   onProgress?: (percent: number) => void;
+  onPhaseChange?: (event: UploadPhaseProgressEvent) => void;
 }): Promise<{
   url: string;
   remoteBucketUrl: string;
@@ -1254,12 +1801,34 @@ export async function uploadMediaToFirebase(params: {
   let width = params.width ?? 0;
   let height = params.height ?? 0;
 
+  const logger = createUploadSessionLogger({
+    sessionId: params.sessionId,
+    projectSlug: params.projectSlug || 'general',
+    fileName: params.file.name,
+    kind: params.kind,
+    fileSizeBytes: params.file.size,
+  });
+
+  logger.info(
+    'init',
+    `Initialized upload for "${params.file.name}" (${Math.round(params.file.size / 1024)} KB, kind=${params.kind})`,
+    { transport: 'staging', percent: 0 }
+  );
+
+  if (params.signal?.aborted) {
+    logger.warn('cancelled', 'Upload aborted before transfer started');
+    throw new UploadCancelledError('Upload cancelled by user.', 'cancelled', 0);
+  }
+
   if (
     params.kind === 'images' &&
     !params.alreadyCompressed &&
     (params.file.type.startsWith('image/') ||
       /\.(jpe?g|png|webp|heic|heif|bmp|avif)$/i.test(params.file.name))
   ) {
+    logger.info('compress', `Compressing image "${params.file.name}" before upload`, {
+      transport: 'staging',
+    });
     const compressed = await compressImageFile(params.file, {
       forcePreserveTransparency: params.forcePreserveTransparency,
       onStatus: params.onStatus,
@@ -1268,6 +1837,13 @@ export async function uploadMediaToFirebase(params: {
     originalBytes = compressed.originalBytes;
     width = compressed.width;
     height = compressed.height;
+    logger.info(
+      'compress',
+      `Image compressed ${Math.round(originalBytes / 1024)} KB -> ${Math.round(
+        targetFile.size / 1024
+      )} KB`,
+      { transport: 'staging' }
+    );
   }
 
   // Ensure monotonic progress updates across transport stages
@@ -1315,26 +1891,54 @@ export async function uploadMediaToFirebase(params: {
         height,
         headers,
         useJsonTransport: false,
+        signal: params.signal,
+        logger,
         onProgress: emitProgress,
+        onPhaseChange: params.onPhaseChange,
       });
     } else {
       data = await streamRawFileUpload({
         file: targetFile,
         headers,
+        signal: params.signal,
+        logger,
         onProgress: emitProgress,
+        onPhaseChange: params.onPhaseChange,
       });
     }
   } catch (err) {
+    if (isUploadCancelledError(err) || params.signal?.aborted) {
+      logger.warn('cancelled', `Upload cancelled during Stage 1 at ${highestProgress}%`, {
+        percent: highestProgress,
+        error: err,
+      });
+      throw err instanceof UploadCancelledError
+        ? err
+        : new UploadCancelledError('Upload cancelled by user.', 'cancelled', highestProgress);
+    }
     primaryError = err;
     if (err instanceof BackendUploadUnavailableError) {
       backendUnavailable = true;
+      logger.warn('transport-fallback', 'Express backend unavailable; skipping JSON chunk fallback to static cloud/vault path', {
+        error: err,
+      });
     } else if (err instanceof Error && (err.message.includes('50 MB') || err.message.includes('413'))) {
+      logger.error('mid-process-error', 'File rejected by 50 MB size limit', { error: err });
       throw new Error(formatUploadErrorMessage(err));
+    } else {
+      logger.warn(
+        'transport-fallback',
+        `Stage 1 (${preferChunked ? 'chunked-binary' : 'raw-stream'}) failed mid-process at ${highestProgress}%; falling back to proxy-proof JSON chunked upload`,
+        { percent: highestProgress, error: err }
+      );
     }
   }
 
   // Stage 2: Proxy-proof JSON chunked upload (standard application/json, zero custom x-* headers)
   if (!data && !backendUnavailable) {
+    if (params.signal?.aborted) {
+      throw new UploadCancelledError('Upload cancelled by user.', 'cancelled', highestProgress);
+    }
     try {
       data = await streamChunkedFileUpload({
         file: targetFile,
@@ -1346,18 +1950,38 @@ export async function uploadMediaToFirebase(params: {
         height,
         headers,
         useJsonTransport: true,
+        signal: params.signal,
+        logger,
         onProgress: emitProgress,
+        onPhaseChange: params.onPhaseChange,
       });
     } catch (err) {
+      if (isUploadCancelledError(err) || params.signal?.aborted) {
+        logger.warn('cancelled', `Upload cancelled during Stage 2 (chunked-json) at ${highestProgress}%`, {
+          percent: highestProgress,
+          error: err,
+        });
+        throw err instanceof UploadCancelledError
+          ? err
+          : new UploadCancelledError('Upload cancelled by user.', 'cancelled', highestProgress);
+      }
       primaryError = err;
       if (err instanceof BackendUploadUnavailableError) {
         backendUnavailable = true;
       }
+      logger.warn('transport-fallback', `Stage 2 (chunked-json) failed at ${highestProgress}%`, {
+        transport: 'chunked-json',
+        percent: highestProgress,
+        error: err,
+      });
     }
   }
 
   // Stage 3: Static hosting fallback — direct Firebase Cloud Storage SDK (only if bucket is provisioned)
   if (!data && backendUnavailable) {
+    if (params.signal?.aborted) {
+      throw new UploadCancelledError('Upload cancelled by user.', 'cancelled', highestProgress);
+    }
     try {
       data = await uploadViaFirebaseStorageSdk({
         file: targetFile,
@@ -1367,17 +1991,33 @@ export async function uploadMediaToFirebase(params: {
         originalBytes,
         width,
         height,
+        signal: params.signal,
+        logger,
         onProgress: emitProgress,
       });
-    } catch {
-      // Bucket not provisioned or unavailable — proceed immediately to Stage 4 Local Portable Vault
+    } catch (sdkErr) {
+      if (isUploadCancelledError(sdkErr) || params.signal?.aborted) {
+        throw sdkErr instanceof UploadCancelledError
+          ? sdkErr
+          : new UploadCancelledError('Upload cancelled by user.', 'cancelled', highestProgress);
+      }
+      logger.warn('transport-fallback', 'Firebase Storage SDK unavailable — proceeding to Local Portable Media Vault', {
+        transport: 'firebase-sdk',
+        error: sdkErr,
+      });
     }
   }
 
   // Stage 4: Local Portable Media Vault (inline Data URI for compact images, IndexedDB + playable Blob URL for audio/video)
   // Guarantees uploads complete cleanly to 100% even on static GitHub Pages builds before Firebase Cloud Storage is enabled.
   if (!data && typeof window !== 'undefined') {
+    if (params.signal?.aborted) {
+      throw new UploadCancelledError('Upload cancelled by user.', 'cancelled', highestProgress);
+    }
     try {
+      logger.info('transport-fallback', 'Storing media in Local Portable Media Vault fallback', {
+        transport: 'local-vault',
+      });
       const vaulted = await saveMediaToLocalVault({
         file: targetFile,
         kind: params.kind,
@@ -1406,11 +2046,18 @@ export async function uploadMediaToFirebase(params: {
         },
       };
     } catch (vaultErr) {
+      logger.error('mid-process-error', 'Local Portable Media Vault fallback also failed', {
+        transport: 'local-vault',
+        error: vaultErr || primaryError,
+      });
       throw new Error(formatUploadErrorMessage(vaultErr || primaryError));
     }
   }
 
   if (!data) {
+    logger.error('mid-process-error', 'All upload transports failed without producing a stored media URL', {
+      error: primaryError,
+    });
     throw new Error(formatUploadErrorMessage(primaryError));
   }
 
@@ -1432,10 +2079,32 @@ export async function uploadMediaToFirebase(params: {
     width,
     height,
     url: data.object.url,
-  }).catch(() => {
-    // Non-blocking if user is not signed in with Firebase Auth
-  });
+  })
+    .then(() => {
+      if (auth.currentUser?.emailVerified) {
+        logger.info('firestore-sync', `Recorded media metadata in Firestore media_records (${objectKey})`, {
+          transport: 'firestore',
+          percent: 100,
+        });
+      }
+    })
+    .catch((fsErr) => {
+      logger.warn('firestore-sync', 'Background Firestore media_records sync skipped or denied', {
+        transport: 'firestore',
+        error: fsErr,
+      });
+    });
 
+  logger.info(
+    'complete',
+    `Upload complete via ${data.object.storageTier} -> ${data.object.url} (${Math.round(
+      storedBytes / 1024
+    )} KB)`,
+    {
+      percent: 100,
+      bytesTransferred: storedBytes,
+    }
+  );
   params.onStatus?.('Upload complete.');
 
   return {
@@ -1728,16 +2397,28 @@ export async function deleteOrderFromFirestore(orderId: string): Promise<void> {
   }
 }
 
+export interface FirestoreSyncResult {
+  synced: boolean;
+  path: string;
+  skippedReason?: 'unauthenticated';
+}
+
 export async function saveChasingHerProjectToFirestore(
   slug: string,
   project: ChasingHerProjectData
-): Promise<void> {
-  const user = auth.currentUser;
-  if (!user || !user.emailVerified) return;
-
+): Promise<FirestoreSyncResult> {
   const safeSlug = slug.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 128) || 'my-love';
-  const usage = computeProjectStorageUsage(project, 'chasing-her');
   const path = `projects/${safeSlug}`;
+  const user = auth.currentUser;
+  if (!user || !user.emailVerified) {
+    console.info('[SiteBuilderUpload][firestore-sync] Skipped Firestore project write (guest session; local & media storage active)', {
+      path,
+      databaseId: FIREBASE_DATABASE_ID,
+    });
+    return { synced: false, path, skippedReason: 'unauthenticated' };
+  }
+
+  const usage = computeProjectStorageUsage(project, 'chasing-her');
   const docRef = doc(db, 'projects', safeSlug);
 
   try {
@@ -1758,6 +2439,12 @@ export async function saveChasingHerProjectToFirestore(
       createdAt: existingData?.createdAt || serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    console.info('[SiteBuilderUpload][firestore-sync] Synced Chasing Her project to Firestore', {
+      path,
+      databaseId: FIREBASE_DATABASE_ID,
+      storedBytes: Math.round(usage.usedBytes),
+    });
+    return { synced: true, path };
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -1766,13 +2453,19 @@ export async function saveChasingHerProjectToFirestore(
 export async function saveMemoriesProjectToFirestore(
   slug: string,
   project: MemoriesProjectData
-): Promise<void> {
-  const user = auth.currentUser;
-  if (!user || !user.emailVerified) return;
-
+): Promise<FirestoreSyncResult> {
   const safeSlug = slug.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 128) || 'my-love';
-  const usage = computeProjectStorageUsage(project, 'memories');
   const path = `memory_projects/${safeSlug}`;
+  const user = auth.currentUser;
+  if (!user || !user.emailVerified) {
+    console.info('[SiteBuilderUpload][firestore-sync] Skipped Firestore project write (guest session; local & media storage active)', {
+      path,
+      databaseId: FIREBASE_DATABASE_ID,
+    });
+    return { synced: false, path, skippedReason: 'unauthenticated' };
+  }
+
+  const usage = computeProjectStorageUsage(project, 'memories');
   const docRef = doc(db, 'memory_projects', safeSlug);
 
   try {
@@ -1794,6 +2487,12 @@ export async function saveMemoriesProjectToFirestore(
       createdAt: existingData?.createdAt || serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    console.info('[SiteBuilderUpload][firestore-sync] Synced Memories project to Firestore', {
+      path,
+      databaseId: FIREBASE_DATABASE_ID,
+      storedBytes: Math.round(usage.usedBytes),
+    });
+    return { synced: true, path };
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }

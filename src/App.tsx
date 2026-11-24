@@ -67,6 +67,7 @@ import { InteractiveWinHerBackExperience } from './components/InteractiveWinHerB
 import { InteractiveBirthdayExperience } from './components/InteractiveBirthdayExperience';
 import { CustomerMySiteView } from './components/CustomerMySiteView';
 import { SiteBuilderStudio } from './components/SiteBuilderStudio';
+import { UploadErrorBoundary } from './components/UploadErrorBoundary';
 import { UnifiedAdminBackstageView } from './components/UnifiedAdminBackstageView';
 import { RecipientSitePreview } from './components/RecipientSitePreview';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallPrompt';
@@ -832,18 +833,24 @@ export function App() {
         {activeView === 'builder' && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 pb-24">
             {canOpenCurrentBuilder ? (
-              <SiteBuilderStudio
+              <UploadErrorBoundary
                 mode="customer"
-                initialProduct={lockedCustomerProduct}
-                activeSlug={builderSlug}
-                chasingHerProjects={chasingHerProjects}
-                memoriesProjects={memoriesProjects}
-                onSaveChasingHer={handleSaveChasingHer}
-                onSaveMemories={handleSaveMemories}
+                projectSlug={builderSlug}
                 onBackToAccount={() => navigateToRoute({ view: 'my-site' })}
-                globalFlowerPool={globalFlowerPool}
-                globalMusicLibrary={musicLibrary}
-              />
+              >
+                <SiteBuilderStudio
+                  mode="customer"
+                  initialProduct={lockedCustomerProduct}
+                  activeSlug={builderSlug}
+                  chasingHerProjects={chasingHerProjects}
+                  memoriesProjects={memoriesProjects}
+                  onSaveChasingHer={handleSaveChasingHer}
+                  onSaveMemories={handleSaveMemories}
+                  onBackToAccount={() => navigateToRoute({ view: 'my-site' })}
+                  globalFlowerPool={globalFlowerPool}
+                  globalMusicLibrary={musicLibrary}
+                />
+              </UploadErrorBoundary>
             ) : (
               <div
                 data-testid="builder-privacy-gate"

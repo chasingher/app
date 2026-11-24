@@ -97,6 +97,7 @@ import {
   formatUploadErrorMessage,
 } from '../utils/uploadPipeline';
 import { SiteBuilderStudio } from './SiteBuilderStudio';
+import { UploadErrorBoundary } from './UploadErrorBoundary';
 import { RecipientSitePreview } from './RecipientSitePreview';
 import { AdminOrderInspector, AdminCreateOrderModal } from './AdminOrderInspector';
 import { AdminExperienceShowcaseEditor } from './AdminExperienceShowcaseEditor';
@@ -1929,17 +1930,19 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
                 </div>
               </div>
 
-              <SiteBuilderStudio
-                mode="admin"
-                initialProduct={studioProduct}
-                activeSlug={activeSlug}
-                chasingHerProjects={chasingHerProjects}
-                memoriesProjects={memoriesProjects}
-                onSaveChasingHer={onSaveChasingHer}
-                onSaveMemories={onSaveMemories}
-                globalFlowerPool={globalFlowerPool}
-                globalMusicLibrary={musicLibrary}
-              />
+              <UploadErrorBoundary mode="admin" projectSlug={activeSlug}>
+                <SiteBuilderStudio
+                  mode="admin"
+                  initialProduct={studioProduct}
+                  activeSlug={activeSlug}
+                  chasingHerProjects={chasingHerProjects}
+                  memoriesProjects={memoriesProjects}
+                  onSaveChasingHer={onSaveChasingHer}
+                  onSaveMemories={onSaveMemories}
+                  globalFlowerPool={globalFlowerPool}
+                  globalMusicLibrary={musicLibrary}
+                />
+              </UploadErrorBoundary>
             </div>
           )}
 

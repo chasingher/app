@@ -257,12 +257,22 @@ async function startServer() {
           totalChunks > 400 ||
           chunkIndex >= totalChunks
         ) {
+          console.warn('[UploadAPI][chunk] Rejected invalid chunk metadata', {
+            uploadId: safeUploadId || 'missing',
+            chunkIndex,
+            totalChunks,
+          });
           res.status(400).json({ error: 'Invalid chunk upload metadata.' });
           return;
         }
 
         const chunkBuffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
         if (chunkBuffer.length === 0) {
+          console.warn('[UploadAPI][chunk] Rejected empty chunk', {
+            uploadId: safeUploadId,
+            chunkIndex,
+            totalChunks,
+          });
           res.status(400).json({ error: 'Empty upload chunk.' });
           return;
         }
@@ -325,9 +335,22 @@ async function startServer() {
           await fs.promises.unlink(localFilePath).catch(() => {});
           await fs.promises.rm(sessionDir, { recursive: true, force: true }).catch(() => {});
           if (assembleErr instanceof Error && assembleErr.message === 'FILE_TOO_LARGE') {
+            console.warn('[UploadAPI][chunk] Assembly aborted — file exceeded 50MB limit', {
+              uploadId: safeUploadId,
+              projectSlug: meta.safeSlug,
+              fileName: meta.safeName,
+              totalSize,
+            });
             res.status(413).json({ error: 'File exceeds the 50 MB maximum upload size.' });
             return;
           }
+          console.error('[UploadAPI][chunk] Mid-process assembly failure', {
+            uploadId: safeUploadId,
+            projectSlug: meta.safeSlug,
+            fileName: meta.safeName,
+            totalChunks,
+            error: assembleErr instanceof Error ? assembleErr.message : String(assembleErr),
+          });
           throw assembleErr;
         }
 
@@ -359,8 +382,20 @@ async function startServer() {
         };
         mediaCatalog.unshift(record);
 
+        console.info('[UploadAPI][chunk] Completed chunked upload', {
+          uploadId: safeUploadId,
+          projectSlug: meta.safeSlug,
+          kind: meta.safeKind,
+          totalChunks,
+          sizeBytes: totalSize,
+          url: finalUrl,
+        });
+
         res.json({ ok: true, completed: true, object: record });
       } catch (err) {
+        console.error('[UploadAPI][chunk] Unhandled chunk upload error', {
+          error: err instanceof Error ? err.message : String(err),
+        });
         if (!res.headersSent) {
           res.status(500).json({
             error: err instanceof Error ? err.message : 'Chunked media upload failed',
@@ -480,16 +515,28 @@ async function startServer() {
       };
       mediaCatalog.unshift(record);
 
+      console.info('[UploadAPI][raw] Completed raw upload', {
+        projectSlug: meta.safeSlug,
+        kind: meta.safeKind,
+        sizeBytes: receivedBytes,
+        url: finalUrl,
+      });
+
       res.json({ ok: true, object: record });
     } catch (err) {
       if (err instanceof Error && err.message === 'FILE_TOO_LARGE') {
+        console.warn('[UploadAPI][raw] Aborted — file exceeded 50MB limit');
         res.status(413).json({ error: 'File exceeds the 50 MB maximum upload size.' });
         return;
       }
       if (err instanceof Error && err.message === 'UPLOAD_ABORTED') {
+        console.warn('[UploadAPI][raw] Client aborted upload mid-stream');
         if (!res.headersSent) res.status(499).json({ error: 'Upload cancelled.' });
         return;
       }
+      console.error('[UploadAPI][raw] Mid-stream upload error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       if (!res.headersSent) {
         res.status(500).json({
           error: err instanceof Error ? err.message : 'Failed to upload media to Firebase storage',
@@ -614,9 +661,20 @@ async function startServer() {
         await fs.promises.unlink(localFilePath).catch(() => {});
         await fs.promises.rm(sessionDir, { recursive: true, force: true }).catch(() => {});
         if (assembleErr instanceof Error && assembleErr.message === 'FILE_TOO_LARGE') {
+          console.warn('[UploadAPI][chunk-json] Assembly aborted — file exceeded 50MB limit', {
+            uploadId: safeUploadId,
+            projectSlug: safeSlug,
+            totalSize,
+          });
           res.status(413).json({ error: 'File exceeds the 50 MB maximum upload size.' });
           return;
         }
+        console.error('[UploadAPI][chunk-json] Mid-process assembly failure', {
+          uploadId: safeUploadId,
+          projectSlug: safeSlug,
+          totalChunks,
+          error: assembleErr instanceof Error ? assembleErr.message : String(assembleErr),
+        });
         throw assembleErr;
       }
 
@@ -647,8 +705,20 @@ async function startServer() {
       };
       mediaCatalog.unshift(record);
 
+      console.info('[UploadAPI][chunk-json] Completed JSON chunked upload', {
+        uploadId: safeUploadId,
+        projectSlug: safeSlug,
+        kind: safeKind,
+        totalChunks,
+        sizeBytes: totalSize,
+        url: finalUrl,
+      });
+
       res.json({ ok: true, completed: true, object: record });
     } catch (err) {
+      console.error('[UploadAPI][chunk-json] Unhandled JSON chunk upload error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       if (!res.headersSent) {
         res.status(500).json({
           error: err instanceof Error ? err.message : 'JSON chunked media upload failed',
