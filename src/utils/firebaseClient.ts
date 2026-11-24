@@ -53,6 +53,18 @@ import {
   sanitizeFunnelSessionForFirestore,
 } from './funnelTracking';
 
+import {
+  buildChunkPlan,
+  computeChunkedUploadProgress,
+  createStallWatchdog,
+  createUploadSessionId,
+  DEFAULT_UPLOAD_CHUNK_BYTES,
+  FIREBASE_SDK_STALL_TIMEOUT_MS,
+  formatUploadErrorMessage,
+  shouldUseChunkedUpload,
+  UPLOAD_STALL_TIMEOUT_MS,
+} from './uploadPipeline';
+
 export const FIREBASE_PROJECT_ID = firebaseConfig.projectId || 'gen-lang-client-0322444571';
 export const FIREBASE_DATABASE_ID =
   firebaseConfig.firestoreDatabaseId || 'ai-studio-chasingher-f7a61704-2cdd-4e3c-af0b-e387f983103a';
@@ -69,6 +81,10 @@ const app = initializeApp({
 export const db = getFirestore(app, FIREBASE_DATABASE_ID);
 export const auth = getAuth(app);
 export const storage = getStorage(app, FIREBASE_STORAGE_GS_URI);
+// Prevent Firebase Cloud Storage SDK from silently retrying for 10 minutes (default 600,000 ms)
+// when a bucket is unreachable or CORS-blocked, which causes progress bars to hang at ~26%.
+storage.maxUploadRetryTime = FIREBASE_SDK_STALL_TIMEOUT_MS;
+storage.maxOperationRetryTime = FIREBASE_SDK_STALL_TIMEOUT_MS;
 
 export function getFirebaseBucketEndpoint(): string {
   return resolveFirebaseStorageEndpoint({
@@ -714,63 +730,338 @@ interface RawUploadResponse {
   };
 }
 
+class BackendUploadUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BackendUploadUnavailableError';
+  }
+}
+
+async function uploadSingleChunkWithRetry(params: {
+  chunkBlob: Blob;
+  headers: Record<string, string>;
+  maxRetries?: number;
+}): Promise<{ ok: boolean; completed?: boolean; object?: RawUploadResponse['object'] }> {
+  const maxRetries = params.maxRetries ?? 2;
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
+      controller.abort();
+    });
+
+    try {
+      const res = await fetch('/api/firebase/upload-chunk', {
+        method: 'POST',
+        headers: {
+          ...params.headers,
+          'Content-Type': 'application/octet-stream',
+          Accept: 'application/json',
+        },
+        body: params.chunkBlob,
+        signal: controller.signal,
+      });
+
+      watchdog.stop();
+
+      const ct = res.headers.get('content-type') || '';
+      if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+        throw new BackendUploadUnavailableError(
+          `Chunk upload API unavailable (${res.status}).`
+        );
+      }
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errMsg = payload?.error || `Chunk upload failed (${res.status})`;
+        if (res.status === 413 || res.status === 400) {
+          throw new Error(errMsg);
+        }
+        throw new Error(errMsg);
+      }
+
+      return payload;
+    } catch (err) {
+      watchdog.stop();
+      if (err instanceof BackendUploadUnavailableError) {
+        throw err;
+      }
+      if (err instanceof Error && (err.message.includes('50 MB') || err.message.includes('413'))) {
+        throw err;
+      }
+      lastError =
+        err instanceof DOMException && err.name === 'AbortError'
+          ? new Error('Upload stalled on chunk transfer — retrying…')
+          : err;
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Chunked upload timed out after retries.');
+}
+
+async function streamChunkedFileUpload(params: {
+  file: File;
+  headers: Record<string, string>;
+  onProgress?: (percent: number) => void;
+}): Promise<RawUploadResponse> {
+  const plan = buildChunkPlan(params.file.size, DEFAULT_UPLOAD_CHUNK_BYTES);
+  if (plan.totalChunks === 0) {
+    throw new Error('Selected file is empty.');
+  }
+
+  const uploadId = createUploadSessionId();
+  let finalResponse: RawUploadResponse | null = null;
+
+  for (const slice of plan.slices) {
+    const chunkBlob = params.file.slice(slice.start, slice.end);
+    params.onProgress?.(
+      computeChunkedUploadProgress(slice.index, plan.totalChunks, 0.25)
+    );
+
+    const chunkHeaders: Record<string, string> = {
+      ...params.headers,
+      'x-upload-id': uploadId,
+      'x-chunk-index': String(slice.index),
+      'x-total-chunks': String(plan.totalChunks),
+    };
+
+    const res = await uploadSingleChunkWithRetry({
+      chunkBlob,
+      headers: chunkHeaders,
+      maxRetries: 2,
+    });
+
+    params.onProgress?.(
+      computeChunkedUploadProgress(slice.index, plan.totalChunks, 1)
+    );
+
+    if (res.completed && res.object) {
+      finalResponse = { ok: true, object: res.object };
+    }
+  }
+
+  if (!finalResponse) {
+    throw new Error('Server did not finalize the uploaded file.');
+  }
+
+  params.onProgress?.(100);
+  return finalResponse;
+}
+
 function streamRawFileUpload(params: {
   file: File;
   headers: Record<string, string>;
   onProgress?: (percent: number) => void;
 }): Promise<RawUploadResponse> {
   if (typeof XMLHttpRequest === 'undefined') {
+    const controller = new AbortController();
+    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => controller.abort());
     return fetch('/api/firebase/upload-raw', {
       method: 'POST',
-      headers: params.headers,
+      headers: { ...params.headers, Accept: 'application/json' },
       body: params.file,
-    }).then(async (res) => {
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.error || 'Firebase media upload failed');
-      }
-      params.onProgress?.(100);
-      return res.json() as Promise<RawUploadResponse>;
-    });
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        watchdog.stop();
+        const ct = res.headers.get('content-type') || '';
+        if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+          throw new BackendUploadUnavailableError(`Upload API unavailable (${res.status}).`);
+        }
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.error || 'Firebase media upload failed');
+        }
+        params.onProgress?.(100);
+        return res.json() as Promise<RawUploadResponse>;
+      })
+      .catch((err) => {
+        watchdog.stop();
+        throw err;
+      });
   }
 
   return new Promise<RawUploadResponse>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let settled = false;
+    let stalledOut = false;
+
+    const finishReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      watchdog.stop();
+      reject(err);
+    };
+
+    const finishResolve = (val: RawUploadResponse) => {
+      if (settled) return;
+      settled = true;
+      watchdog.stop();
+      resolve(val);
+    };
+
+    const watchdog = createStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
+      stalledOut = true;
+      try {
+        xhr.abort();
+      } catch {
+        // ignore
+      }
+      finishReject(new Error('Upload stalled with no progress — switching transport.'));
+    });
+
     xhr.open('POST', '/api/firebase/upload-raw', true);
+    xhr.timeout = 30_000;
+    xhr.setRequestHeader('Accept', 'application/json');
     for (const [key, val] of Object.entries(params.headers)) {
       xhr.setRequestHeader(key, val);
     }
 
     xhr.upload.onprogress = (ev) => {
+      watchdog.touch();
       if (ev.lengthComputable && ev.total > 0) {
-        const pct = Math.min(99, Math.round((ev.loaded / ev.total) * 100));
+        const pct = Math.max(5, Math.min(99, Math.round((ev.loaded / ev.total) * 100)));
         params.onProgress?.(pct);
       }
     };
 
     xhr.onload = () => {
+      const ct = xhr.getResponseHeader('content-type') || '';
+      if (xhr.status === 404 || xhr.status === 405 || !ct.includes('application/json')) {
+        finishReject(new BackendUploadUnavailableError(`Upload API unavailable (${xhr.status}).`));
+        return;
+      }
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const parsed = JSON.parse(xhr.responseText) as RawUploadResponse;
+          if (!parsed?.ok || !parsed?.object?.url) {
+            finishReject(new Error('Invalid upload response from server'));
+            return;
+          }
           params.onProgress?.(100);
-          resolve(parsed);
+          finishResolve(parsed);
         } catch {
-          reject(new Error('Invalid upload response from server'));
+          finishReject(new Error('Invalid upload response from server'));
         }
       } else {
         try {
           const errBody = JSON.parse(xhr.responseText);
-          reject(new Error(errBody.error || `Upload failed (${xhr.status})`));
+          finishReject(new Error(errBody.error || `Upload failed (${xhr.status})`));
         } catch {
-          reject(new Error(`Upload failed (${xhr.status})`));
+          finishReject(new Error(`Upload failed (${xhr.status})`));
         }
       }
     };
 
-    xhr.onerror = () => reject(new Error('Network error while uploading media'));
-    xhr.onabort = () => reject(new Error('Upload was cancelled'));
+    xhr.ontimeout = () => finishReject(new Error('Upload timed out while waiting for server.'));
+    xhr.onerror = () => finishReject(new Error('Network error while uploading media'));
+    xhr.onabort = () =>
+      finishReject(
+        new Error(stalledOut ? 'Upload stalled with no progress.' : 'Upload was cancelled')
+      );
     xhr.send(params.file);
   });
+}
+
+async function uploadViaFirebaseStorageSdk(params: {
+  file: File;
+  kind: 'images' | 'video' | 'voice' | 'music';
+  projectSlug: string;
+  songTitle: string;
+  originalBytes: number;
+  width: number;
+  height: number;
+  onProgress?: (percent: number) => void;
+}): Promise<RawUploadResponse> {
+  const safeSlug = (params.projectSlug || 'general').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
+  const safeName = params.file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120);
+  const objectKey = `${params.kind}/${safeSlug}/${Date.now()}-${safeName}`;
+  const fileRef = storageRef(storage, objectKey);
+
+  const downloadUrl = await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let lastBytes = -1;
+
+    const task = uploadBytesResumable(fileRef, params.file, {
+      contentType: params.file.type || 'application/octet-stream',
+      customMetadata: params.songTitle ? { songTitle: params.songTitle } : undefined,
+    });
+
+    const watchdog = createStallWatchdog(FIREBASE_SDK_STALL_TIMEOUT_MS, () => {
+      if (settled) return;
+      settled = true;
+      try {
+        task.cancel();
+      } catch {
+        // ignore
+      }
+      reject(
+        new Error(
+          'Cloud Storage bucket stalled without completing transfer. Check Firebase Storage rules/CORS or retry.'
+        )
+      );
+    });
+
+    task.on(
+      'state_changed',
+      (snapshot) => {
+        if (snapshot.bytesTransferred > lastBytes) {
+          lastBytes = snapshot.bytesTransferred;
+          watchdog.touch();
+        }
+        if (snapshot.totalBytes > 0) {
+          const pct = Math.max(
+            5,
+            Math.min(99, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100))
+          );
+          params.onProgress?.(pct);
+        }
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        watchdog.stop();
+        reject(err);
+      },
+      async () => {
+        if (settled) return;
+        watchdog.stop();
+        try {
+          const url = await getDownloadURL(task.snapshot.ref);
+          settled = true;
+          params.onProgress?.(100);
+          resolve(url);
+        } catch (urlErr) {
+          settled = true;
+          reject(urlErr);
+        }
+      }
+    );
+  });
+
+  return {
+    ok: true,
+    object: {
+      id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      objectKey,
+      fileName: params.songTitle || params.file.name,
+      songTitle: params.songTitle || undefined,
+      contentType: params.file.type || 'application/octet-stream',
+      sizeBytes: params.file.size,
+      originalBytes: params.originalBytes,
+      savedBytes: Math.max(0, params.originalBytes - params.file.size),
+      width: params.width,
+      height: params.height,
+      url: downloadUrl,
+      storageTier: 'firebase-5gb',
+    },
+  };
 }
 
 export async function uploadMediaToFirebase(params: {
@@ -820,8 +1111,16 @@ export async function uploadMediaToFirebase(params: {
     height = compressed.height;
   }
 
+  // Ensure monotonic progress updates across transport stages
+  let highestProgress = 0;
+  const emitProgress = (pct: number) => {
+    const clamped = Math.max(highestProgress, Math.min(100, Math.round(pct)));
+    highestProgress = clamped;
+    params.onProgress?.(clamped);
+  };
+
   params.onStatus?.('Uploading…');
-  params.onProgress?.(5);
+  emitProgress(5);
 
   const cleanSongTitle = (params.songTitle || '').trim().slice(0, 120);
   const headers: Record<string, string> = {
@@ -838,63 +1137,80 @@ export async function uploadMediaToFirebase(params: {
     headers['x-song-title'] = encodeURIComponent(cleanSongTitle);
   }
 
-  let data: RawUploadResponse;
+  let data: RawUploadResponse | null = null;
+  let backendUnavailable = false;
+  let primaryError: unknown = null;
+
+  const preferChunked = shouldUseChunkedUpload(targetFile.size, params.kind);
+
+  // Stage 1: Primary Express backend transport (chunked 512 KB for audio/video/large files, raw stream for small images)
   try {
-    data = await streamRawFileUpload({
-      file: targetFile,
-      headers,
-      onProgress: params.onProgress,
-    });
-  } catch {
-    // Automatic direct Firebase Cloud Storage SDK upload when running on static hosting (Firebase Hosting / GitHub Pages)
-    const safeSlug = (params.projectSlug || 'general').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
-    const safeName = targetFile.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120);
-    const objectKey = `${params.kind}/${safeSlug}/${Date.now()}-${safeName}`;
-    const fileRef = storageRef(storage, objectKey);
-
-    const downloadUrl = await new Promise<string>((resolve, reject) => {
-      const task = uploadBytesResumable(fileRef, targetFile, {
-        contentType: targetFile.type || 'application/octet-stream',
-        customMetadata: cleanSongTitle ? { songTitle: cleanSongTitle } : undefined,
+    if (preferChunked) {
+      data = await streamChunkedFileUpload({
+        file: targetFile,
+        headers,
+        onProgress: emitProgress,
       });
-      task.on(
-        'state_changed',
-        (snapshot) => {
-          if (snapshot.totalBytes > 0) {
-            const pct = Math.min(99, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100));
-            params.onProgress?.(pct);
-          }
-        },
-        (err) => reject(err),
-        async () => {
-          try {
-            const url = await getDownloadURL(task.snapshot.ref);
-            params.onProgress?.(100);
-            resolve(url);
-          } catch (urlErr) {
-            reject(urlErr);
-          }
-        }
-      );
-    });
+    } else {
+      data = await streamRawFileUpload({
+        file: targetFile,
+        headers,
+        onProgress: emitProgress,
+      });
+    }
+  } catch (err) {
+    primaryError = err;
+    if (err instanceof BackendUploadUnavailableError) {
+      backendUnavailable = true;
+    } else if (err instanceof Error && (err.message.includes('50 MB') || err.message.includes('413'))) {
+      throw new Error(formatUploadErrorMessage(err));
+    }
+  }
 
-    data = {
-      ok: true,
-      object: {
-        id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        objectKey,
-        fileName: cleanSongTitle || targetFile.name,
-        songTitle: cleanSongTitle || undefined,
-        contentType: targetFile.type || 'application/octet-stream',
-        sizeBytes: targetFile.size,
+  // Stage 2: Alternate Express backend transport if Stage 1 hit a proxy stall or single-shot glitch
+  if (!data && !backendUnavailable) {
+    try {
+      if (preferChunked) {
+        data = await streamRawFileUpload({
+          file: targetFile,
+          headers,
+          onProgress: emitProgress,
+        });
+      } else {
+        data = await streamChunkedFileUpload({
+          file: targetFile,
+          headers,
+          onProgress: emitProgress,
+        });
+      }
+    } catch (err) {
+      primaryError = err;
+      if (err instanceof BackendUploadUnavailableError) {
+        backendUnavailable = true;
+      }
+    }
+  }
+
+  // Stage 3: Static hosting fallback (direct Firebase Cloud Storage SDK with strict 10s stall watchdog)
+  if (!data && backendUnavailable) {
+    try {
+      data = await uploadViaFirebaseStorageSdk({
+        file: targetFile,
+        kind: params.kind,
+        projectSlug: params.projectSlug,
+        songTitle: cleanSongTitle,
         originalBytes,
-        savedBytes: Math.max(0, originalBytes - targetFile.size),
         width,
         height,
-        url: downloadUrl,
-        storageTier: 'firebase-5gb',
-      },
-    };
+        onProgress: emitProgress,
+      });
+    } catch (sdkErr) {
+      throw new Error(formatUploadErrorMessage(sdkErr));
+    }
+  }
+
+  if (!data) {
+    throw new Error(formatUploadErrorMessage(primaryError));
   }
 
   const storedBytes: number = data.object.sizeBytes;

@@ -83,9 +83,14 @@ export default defineConfig(() => {
           clientsClaim: true,
           skipWaiting: true,
           cleanupOutdatedCaches: true,
+          navigateFallbackDenylist: [/^\/api\//, /^\/uploads\//],
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           runtimeCaching: [
+            {
+              urlPattern: /^\/(?:api|uploads)\/.*/i,
+              handler: 'NetworkOnly',
+            },
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
               handler: 'CacheFirst',

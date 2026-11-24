@@ -93,6 +93,9 @@ import {
   cleanFirebaseStorageCatalog,
 } from '../utils/firebaseClient';
 import { PWAInstallButton } from './PWAInstallPrompt';
+import {
+  formatUploadErrorMessage,
+} from '../utils/uploadPipeline';
 import { SiteBuilderStudio } from './SiteBuilderStudio';
 import { RecipientSitePreview } from './RecipientSitePreview';
 import { AdminOrderInspector, AdminCreateOrderModal } from './AdminOrderInspector';
@@ -628,7 +631,7 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setAssetStatusMsg('Optimizing & uploading to Firebase 5 GB Storage…');
+    setAssetStatusMsg(`Optimizing & uploading "${file.name}"… 5%`);
     try {
       const kind =
         purpose === 'music'
@@ -641,6 +644,9 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
         kind,
         projectSlug: 'global-assets',
         forcePreserveTransparency: purpose === 'flower',
+        onProgress: (pct) => {
+          setAssetStatusMsg(`Uploading "${file.name}"… ${pct}%`);
+        },
       });
 
       if (purpose === 'flower') {
@@ -679,11 +685,11 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
         setAssetStatusMsg('Uploaded testimonial media to Firebase Storage.');
       }
       await loadFirebaseState();
-    } catch {
-      setAssetStatusMsg('Upload failed — please try again.');
+    } catch (err) {
+      setAssetStatusMsg(formatUploadErrorMessage(err));
     }
     e.target.value = '';
-    setTimeout(() => setAssetStatusMsg(null), 3500);
+    setTimeout(() => setAssetStatusMsg(null), 4500);
   };
 
   const handleSelectAdminAudioFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -879,7 +885,8 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
     const file = e.target.files?.[0];
     if (!file) return;
     setFirebaseUploading(true);
-    setFirebaseFeedback(null);
+    setFirebaseFeedbackTone('warning');
+    setFirebaseFeedback(`Uploading "${file.name}"… 5%`);
     try {
       const kind = file.type.startsWith('video/')
         ? 'video'
@@ -890,8 +897,12 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
         file,
         kind,
         projectSlug: activeSlug || 'admin-pool',
+        onProgress: (pct) => {
+          setFirebaseFeedback(`Uploading "${file.name}"… ${pct}%`);
+        },
       });
       await loadFirebaseState();
+      setFirebaseFeedbackTone('success');
       setFirebaseFeedback(
         `Uploaded "${uploaded.objectKey.split('/').pop()}" (${Math.max(1, Math.round(uploaded.sizeBytes / 1024))} KB${
           uploaded.savedBytes > 0
@@ -899,8 +910,9 @@ export const UnifiedAdminBackstageView: React.FC<UnifiedAdminBackstageViewProps>
             : ''
         }) to ${FIREBASE_STORAGE_BUCKET}.`
       );
-    } catch {
-      setFirebaseFeedback('Upload failed. Please try another file.');
+    } catch (err) {
+      setFirebaseFeedbackTone('error');
+      setFirebaseFeedback(formatUploadErrorMessage(err, 'Upload failed. Please try another file.'));
     } finally {
       setFirebaseUploading(false);
       e.target.value = '';

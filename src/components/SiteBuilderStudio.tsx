@@ -53,6 +53,10 @@ import {
   saveChasingHerProjectToFirestore,
   saveMemoriesProjectToFirestore,
 } from '../utils/firebaseClient';
+import {
+  computePoolUploadProgress,
+  formatUploadErrorMessage,
+} from '../utils/uploadPipeline';
 import { compressImageBatch } from '../utils/imageCompression';
 import {
   buildChasingHerStandaloneHtml,
@@ -824,6 +828,7 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
     setQuotaErrorBanner('');
     setSaveBanner('Preparing fast upload…');
     let hadUploadFailure = false;
+    let lastUploadError = '';
 
     const uploadStagedPool = async (
       items: ActiveBuildMediaItem[],
@@ -837,12 +842,10 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
 
       const progressByIndex = new Array<number>(stagedItems.length).fill(0);
       let nextIdx = 0;
-      const concurrency = Math.min(4, stagedItems.length);
+      const concurrency = Math.min(2, stagedItems.length);
 
       const updateOverallProgress = () => {
-        const avg = Math.round(
-          progressByIndex.reduce((sum, p) => sum + p, 0) / stagedItems.length
-        );
+        const avg = computePoolUploadProgress(progressByIndex);
         setSaveBanner(
           `Uploading ${stagedItems.length} file${stagedItems.length > 1 ? 's' : ''}… ${avg}%`
         );
@@ -873,8 +876,12 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
             progressByIndex[current] = 100;
             updateOverallProgress();
             uploadedMap.set(item.url, uploaded);
-          } catch {
+          } catch (err) {
             hadUploadFailure = true;
+            lastUploadError = formatUploadErrorMessage(
+              err,
+              `Failed to upload "${item.name}".`
+            );
           }
         }
       };
@@ -919,7 +926,9 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
       if (hadUploadFailure) {
         setChForm(working);
         setQuotaErrorBanner(
-          'Network connection interrupted while uploading to Firebase storage. Your optimized media remains safely staged — tap Save & Publish to retry.'
+          lastUploadError
+            ? `${lastUploadError} Your media remains safely staged — tap Save & Publish to retry.`
+            : 'Network connection interrupted while uploading media. Your optimized media remains safely staged — tap Save & Publish to retry.'
         );
         setSaveBanner('');
         return;
@@ -976,7 +985,9 @@ export const SiteBuilderStudio: React.FC<SiteBuilderStudioProps> = ({
       if (hadUploadFailure) {
         setMemForm(working);
         setQuotaErrorBanner(
-          'Network connection interrupted while uploading to cloud storage. Your optimized media remains safely staged — tap Save & Publish to retry.'
+          lastUploadError
+            ? `${lastUploadError} Your media remains safely staged — tap Save & Publish to retry.`
+            : 'Network connection interrupted while uploading media. Your optimized media remains safely staged — tap Save & Publish to retry.'
         );
         setSaveBanner('');
         return;

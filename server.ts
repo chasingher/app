@@ -191,41 +191,196 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // High-speed raw binary streaming upload (zero Base64 bloat, zero JSON parse overhead)
+  const CHUNK_TEMP_DIR = path.resolve(FIREBASE_UPLOAD_DIR, '_chunks');
+  if (!fs.existsSync(CHUNK_TEMP_DIR)) {
+    fs.mkdirSync(CHUNK_TEMP_DIR, { recursive: true });
+  }
+
+  function sanitizeUploadMeta(headers: express.Request['headers']) {
+    const rawFileName = decodeHeaderValue(headers['x-file-name'], 'upload.bin');
+    const rawKind = decodeHeaderValue(headers['x-kind'], 'images');
+    const rawSlug = decodeHeaderValue(headers['x-project-slug'], 'general');
+    const rawSongTitle = decodeHeaderValue(headers['x-song-title'], '').trim().slice(0, 120);
+    const contentType =
+      decodeHeaderValue(headers['x-content-type']) ||
+      (typeof headers['content-type'] === 'string'
+        ? headers['content-type'].split(';')[0].trim()
+        : 'application/octet-stream');
+
+    const originalBytesHeader = Number(headers['x-original-bytes'] || 0);
+    const widthHeader = Number(headers['x-width'] || 0);
+    const heightHeader = Number(headers['x-height'] || 0);
+
+    const safeSlug = rawSlug.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120) || 'general';
+    const safeKind = ['images', 'video', 'voice', 'music'].includes(rawKind)
+      ? (rawKind as FirebaseMediaRecord['kind'])
+      : 'images';
+    const safeName =
+      rawFileName.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^\.+/, '').slice(0, 160) ||
+      `media-${Date.now()}.bin`;
+
+    return {
+      rawSongTitle,
+      contentType,
+      originalBytesHeader,
+      widthHeader,
+      heightHeader,
+      safeSlug,
+      safeKind,
+      safeName,
+    };
+  }
+
+  // Rock-solid chunked binary upload (512 KB chunks — immune to reverse-proxy buffering, 32 MB limits, and stream races)
+  app.post(
+    '/api/firebase/upload-chunk',
+    express.raw({ type: '*/*', limit: '4mb' }),
+    async (req, res) => {
+      try {
+        const rawUploadId = decodeHeaderValue(req.headers['x-upload-id'], '');
+        const safeUploadId = rawUploadId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+        const chunkIndex = Number(req.headers['x-chunk-index']);
+        const totalChunks = Number(req.headers['x-total-chunks']);
+
+        if (
+          !safeUploadId ||
+          !Number.isInteger(chunkIndex) ||
+          !Number.isInteger(totalChunks) ||
+          chunkIndex < 0 ||
+          totalChunks < 1 ||
+          totalChunks > 200 ||
+          chunkIndex >= totalChunks
+        ) {
+          res.status(400).json({ error: 'Invalid chunk upload metadata.' });
+          return;
+        }
+
+        const chunkBuffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+        if (chunkBuffer.length === 0) {
+          res.status(400).json({ error: 'Empty upload chunk.' });
+          return;
+        }
+
+        const sessionDir = path.resolve(CHUNK_TEMP_DIR, safeUploadId);
+        if (!sessionDir.startsWith(`${CHUNK_TEMP_DIR}${path.sep}`)) {
+          res.status(400).json({ error: 'Invalid upload session path.' });
+          return;
+        }
+
+        await fs.promises.mkdir(sessionDir, { recursive: true });
+        const chunkPath = path.join(sessionDir, `${String(chunkIndex).padStart(5, '0')}.part`);
+        await fs.promises.writeFile(chunkPath, chunkBuffer);
+
+        if (chunkIndex < totalChunks - 1) {
+          res.json({
+            ok: true,
+            completed: false,
+            chunkIndex,
+            totalChunks,
+            receivedBytes: chunkBuffer.length,
+          });
+          return;
+        }
+
+        // Final chunk arrived — assemble all chunks cleanly into the final file
+        const meta = sanitizeUploadMeta(req.headers);
+        const stamp = Date.now().toString(36);
+        const objectKey = `projects/${meta.safeSlug}/${meta.safeKind}/${stamp}-${meta.safeName}`;
+        const localFilePath = resolveSafeUploadPath(objectKey);
+        await fs.promises.mkdir(path.dirname(localFilePath), { recursive: true });
+
+        let totalSize = 0;
+        const outStream = fs.createWriteStream(localFilePath);
+        try {
+          for (let i = 0; i < totalChunks; i++) {
+            const partPath = path.join(sessionDir, `${String(i).padStart(5, '0')}.part`);
+            if (!fs.existsSync(partPath)) {
+              throw new Error(`Missing upload chunk ${i + 1} of ${totalChunks}.`);
+            }
+            const partBuf = await fs.promises.readFile(partPath);
+            totalSize += partBuf.length;
+            if (totalSize > MAX_UPLOAD_BYTES) {
+              throw new Error('FILE_TOO_LARGE');
+            }
+            if (!outStream.write(partBuf)) {
+              await new Promise<void>((resolve, reject) => {
+                outStream.once('drain', resolve);
+                outStream.once('error', reject);
+              });
+            }
+          }
+          await new Promise<void>((resolve, reject) => {
+            outStream.on('error', reject);
+            outStream.on('finish', resolve);
+            outStream.end();
+          });
+        } catch (assembleErr) {
+          outStream.destroy();
+          await fs.promises.unlink(localFilePath).catch(() => {});
+          await fs.promises.rm(sessionDir, { recursive: true, force: true }).catch(() => {});
+          if (assembleErr instanceof Error && assembleErr.message === 'FILE_TOO_LARGE') {
+            res.status(413).json({ error: 'File exceeds the 50 MB maximum upload size.' });
+            return;
+          }
+          throw assembleErr;
+        }
+
+        // Clean up temporary chunk directory
+        await fs.promises.rm(sessionDir, { recursive: true, force: true }).catch(() => {});
+
+        const finalUrl = `/uploads/firebase/${objectKey}`;
+        const rawOriginal =
+          Number.isFinite(meta.originalBytesHeader) && meta.originalBytesHeader >= totalSize
+            ? meta.originalBytesHeader
+            : totalSize;
+
+        const record: FirebaseMediaRecord = {
+          id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          objectKey,
+          fileName: meta.rawSongTitle || meta.safeName,
+          ...(meta.rawSongTitle ? { songTitle: meta.rawSongTitle } : {}),
+          kind: meta.safeKind,
+          contentType: meta.contentType || 'application/octet-stream',
+          sizeBytes: totalSize,
+          originalBytes: rawOriginal,
+          savedBytes: Math.max(0, rawOriginal - totalSize),
+          width: Number.isFinite(meta.widthHeader) && meta.widthHeader > 0 ? meta.widthHeader : undefined,
+          height: Number.isFinite(meta.heightHeader) && meta.heightHeader > 0 ? meta.heightHeader : undefined,
+          projectSlug: meta.safeSlug,
+          url: finalUrl,
+          storageTier: 'firebase-5gb',
+          createdAt: new Date().toISOString(),
+        };
+        mediaCatalog.unshift(record);
+
+        res.json({ ok: true, completed: true, object: record });
+      } catch (err) {
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: err instanceof Error ? err.message : 'Chunked media upload failed',
+          });
+        }
+      }
+    }
+  );
+
+  // High-speed raw binary streaming upload (pause immediately + sync mkdir so no chunks are ever lost)
   app.post('/api/firebase/upload-raw', async (req, res) => {
+    req.pause();
     try {
       const contentLengthHeader = Number(req.headers['content-length'] || 0);
       if (Number.isFinite(contentLengthHeader) && contentLengthHeader > MAX_UPLOAD_BYTES) {
+        req.resume();
         res.status(413).json({ error: 'File exceeds the 50 MB maximum upload size.' });
         return;
       }
 
-      const rawFileName = decodeHeaderValue(req.headers['x-file-name'], 'upload.bin');
-      const rawKind = decodeHeaderValue(req.headers['x-kind'], 'images');
-      const rawSlug = decodeHeaderValue(req.headers['x-project-slug'], 'general');
-      const rawSongTitle = decodeHeaderValue(req.headers['x-song-title'], '').trim().slice(0, 120);
-      const contentType =
-        decodeHeaderValue(req.headers['x-content-type']) ||
-        (typeof req.headers['content-type'] === 'string'
-          ? req.headers['content-type'].split(';')[0].trim()
-          : 'application/octet-stream');
-
-      const originalBytesHeader = Number(req.headers['x-original-bytes'] || 0);
-      const widthHeader = Number(req.headers['x-width'] || 0);
-      const heightHeader = Number(req.headers['x-height'] || 0);
-
-      const safeSlug = rawSlug.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120) || 'general';
-      const safeKind = ['images', 'video', 'voice', 'music'].includes(rawKind)
-        ? (rawKind as FirebaseMediaRecord['kind'])
-        : 'images';
-      const safeName =
-        rawFileName.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^\.+/, '').slice(0, 160) ||
-        `media-${Date.now()}.bin`;
+      const meta = sanitizeUploadMeta(req.headers);
       const stamp = Date.now().toString(36);
-      const objectKey = `projects/${safeSlug}/${safeKind}/${stamp}-${safeName}`;
+      const objectKey = `projects/${meta.safeSlug}/${meta.safeKind}/${stamp}-${meta.safeName}`;
       const localFilePath = resolveSafeUploadPath(objectKey);
 
-      await fs.promises.mkdir(path.dirname(localFilePath), { recursive: true });
+      fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
 
       const writeStream = fs.createWriteStream(localFilePath);
       let receivedBytes = 0;
@@ -285,6 +440,7 @@ async function startServer() {
         });
 
         req.pipe(writeStream);
+        req.resume();
       });
 
       if (receivedBytes === 0) {
@@ -295,23 +451,23 @@ async function startServer() {
 
       const finalUrl = `/uploads/firebase/${objectKey}`;
       const rawOriginal =
-        Number.isFinite(originalBytesHeader) && originalBytesHeader >= receivedBytes
-          ? originalBytesHeader
+        Number.isFinite(meta.originalBytesHeader) && meta.originalBytesHeader >= receivedBytes
+          ? meta.originalBytesHeader
           : receivedBytes;
 
       const record: FirebaseMediaRecord = {
         id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         objectKey,
-        fileName: rawSongTitle || safeName,
-        ...(rawSongTitle ? { songTitle: rawSongTitle } : {}),
-        kind: safeKind,
-        contentType: contentType || 'application/octet-stream',
+        fileName: meta.rawSongTitle || meta.safeName,
+        ...(meta.rawSongTitle ? { songTitle: meta.rawSongTitle } : {}),
+        kind: meta.safeKind,
+        contentType: meta.contentType || 'application/octet-stream',
         sizeBytes: receivedBytes,
         originalBytes: rawOriginal,
         savedBytes: Math.max(0, rawOriginal - receivedBytes),
-        width: Number.isFinite(widthHeader) && widthHeader > 0 ? widthHeader : undefined,
-        height: Number.isFinite(heightHeader) && heightHeader > 0 ? heightHeader : undefined,
-        projectSlug: safeSlug,
+        width: Number.isFinite(meta.widthHeader) && meta.widthHeader > 0 ? meta.widthHeader : undefined,
+        height: Number.isFinite(meta.heightHeader) && meta.heightHeader > 0 ? meta.heightHeader : undefined,
+        projectSlug: meta.safeSlug,
         url: finalUrl,
         storageTier: 'firebase-5gb',
         createdAt: new Date().toISOString(),
@@ -495,6 +651,19 @@ async function startServer() {
     }
     res.json({ ok: true, deleted: false });
   });
+
+  // Always serve uploaded media directly from public/uploads in BOTH dev and production
+  // with byte-range support so audio/video playback & seeking work cleanly across browsers.
+  app.use(
+    '/uploads',
+    express.static(path.resolve(__dirname, 'public/uploads'), {
+      acceptRanges: true,
+      maxAge: '7d',
+      setHeaders: (res) => {
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      },
+    })
+  );
 
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
